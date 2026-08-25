@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import {
   Activity, Radar, LayoutGrid, Wallet, Settings, Search, NotebookPen,
-  Moon, Sun, ChevronsLeft, ChevronsRight, ChevronDown, LineChart, Github, UserRound,
+  Moon, Sun, ChevronsLeft, ChevronsRight, ChevronDown, LineChart,
   Cog, Cpu, Database, Cable, Rocket, FlaskConical, Star, FileText, Swords, Thermometer, Gauge,
   Rss, Newspaper, TrendingUp,
 } from "lucide-react";
@@ -15,10 +15,6 @@ import { version as PKG_VERSION } from "../../../package.json";
 
 // 版本号只从 package.json 读，不再各处写死（发 v0.3.0 时三处忘改停在 v0.2.2，#20）
 const APP_VERSION = `v${PKG_VERSION}`;
-const REPO_URL = "https://github.com/simonlin1212/Vibe-Research";
-// 作者联系方式
-const X_URL = "https://x.com/linsizhen";
-const MAIL_URL = "mailto:simonlin0423@gmail.com";
 
 const NAV = [
   { to: "/daily-review", icon: Activity, label: "每日复盘" },
@@ -175,9 +171,6 @@ export function Layout() {
               <button onClick={toggle} className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground" title={dark ? "亮色" : "暗色"}>
                 {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
               </button>
-              <a href={X_URL} target="_blank" rel="noreferrer" className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground" title="联系作者 · X @linsizhen">
-                <UserRound className="h-4 w-4" />
-              </a>
               <button onClick={() => setCollapsed(false)} className="rounded p-1.5 text-muted-foreground transition-colors hover:text-foreground" title="展开">
                 <ChevronsRight className="h-4 w-4" />
               </button>
@@ -190,22 +183,10 @@ export function Layout() {
                   {dark ? "亮色" : "暗色"}
                 </button>
                 <div className="flex items-center gap-2">
-                  <a href={X_URL} target="_blank" rel="noreferrer" className="text-muted-foreground transition-colors hover:text-foreground" title="联系作者 · X @linsizhen">
-                    <UserRound className="h-3.5 w-3.5" />
-                  </a>
-                  <a href={REPO_URL} target="_blank" rel="noreferrer" className="text-muted-foreground transition-colors hover:text-foreground" title="GitHub">
-                    <Github className="h-3.5 w-3.5" />
-                  </a>
                   <button onClick={() => setCollapsed(true)} className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground" title="收起">
                     <ChevronsLeft className="h-3.5 w-3.5" />
                   </button>
                 </div>
-              </div>
-              <div className="flex items-center gap-1.5 text-[11px] text-primary/80">
-                <span className="text-muted-foreground/60">联系作者</span>
-                <a href={X_URL} target="_blank" rel="noreferrer" className="transition-colors hover:text-primary">X</a>
-                <span className="text-muted-foreground/40">·</span>
-                <a href={MAIL_URL} className="transition-colors hover:text-primary">Email</a>
               </div>
               <p className="text-[11px] leading-relaxed text-muted-foreground/60">
                 {APP_VERSION} · 不荐股 · 不预测 · 无倾向
