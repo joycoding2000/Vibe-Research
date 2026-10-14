@@ -1573,6 +1573,11 @@ function failureMessage(agent: LocalAgentId, stdout: string, stderr: string, cod
   const label = AGENT_LABEL[agent];
   const command = AGENT_LOGIN_COMMAND[agent];
   const text = `${stderr}\n${stdout}`.slice(0, 16_000);
+  // OpenCode 不传模型名(模型由用户的 OpenCode 配置决定):默认模型被地区/服务商拒绝时是可行动的固定问题,
+  // 不是「调不过去」——换一个可用模型(它自己的 opencode-go 网关或用户网关)即可,重试救不了。
+  if (agent === "opencode" && /country, region|region, or territory|territory not supported/i.test(text)) {
+    return new LocalAgentError("agent_model_unavailable", "OpenCode 里当前默认的模型连不上（地区或服务商限制）。请在终端 opencode 里换一个可用模型，或把 opencode.json 里默认 model 改好后再试");
+  }
   if (/not logged in|login required|authentication|oauth|unauthori[sz]ed|\b401\b/i.test(text)) {
     return new LocalAgentError("agent_not_authenticated", `${label} 登录已失效，请先运行 ${command} 并完成登录`);
   }

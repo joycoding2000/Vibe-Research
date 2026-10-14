@@ -1382,6 +1382,7 @@ function fakeOpenCode(dir = fs.mkdtempSync(path.join(os.tmpdir(), "vra-fake-open
     "  const ev=(o)=>console.log(JSON.stringify(o));",
     "  const scene=process.env.FAKE_EXEC||'ack';",
     "  if(scene==='quota'){ev({type:'error',error:{message:'You have hit your usage limit. please wait.'}});process.exit(1)}",
+    "  if(scene==='region'){ev({type:'error',error:{message:'Country, region, or territory not supported'}});process.exit(1)}",
     "  if(scene==='shell'){ev({type:'tool_use',part:{type:'tool',tool:'bash',state:{status:'running'}}});setInterval(()=>{},1000);return}",
     "  if(scene==='nostop'){ev({type:'text',part:{type:'text',text:'半截'}});ev({type:'step_finish',part:{reason:'tool-calls'}});return}",
     "  const files=[];for(let i=0;i<a.length;i++)if(a[i]==='--file')files.push(a[i+1]);",
@@ -1474,7 +1475,7 @@ test("OpenCode Deep 只挂产品受控 MCP,schema 写进内联提示词,执行�
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });
 
-test("OpenCode 越界杀进程树报策略违规,无正常收尾不能当成功,配额耗尽按退出码归类", async () => {
+test("OpenCode 越界杀进程树报策略违规,无正常收尾不能当成功,配额/地区错误各有可行动分类", async () => {
   const f = fakeOpenCode();
   try {
     const env = { ...PLATFORM_ENV, OPENCODE_BIN: f.bin, PATH: "" };
@@ -1486,5 +1487,8 @@ test("OpenCode 越界杀进程树报策略违规,无正常收尾不能当成功,
       (e: unknown) => e instanceof LocalAgentError && e.code === "agent_failed", "没有 reason=stop 的收尾不能当成功");
     await assert.rejects(runLocalAgent("opencode", { systemPrompt: "S", userPrompt: "U", env: { ...env, FAKE_EXEC: "quota" } }),
       (e: unknown) => e instanceof LocalAgentError && e.code === "agent_quota");
+    await assert.rejects(runLocalAgent("opencode", { systemPrompt: "S", userPrompt: "U", env: { ...env, FAKE_EXEC: "region" } }),
+      (e: unknown) => e instanceof LocalAgentError && e.code === "agent_model_unavailable" && /换一个可用模型/.test(e.message),
+      "OpenCode 默认模型被地区拒绝是可行动的固定问题,重试救不了");
   } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });

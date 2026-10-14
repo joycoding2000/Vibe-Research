@@ -192,6 +192,7 @@ function publicLocalAgentFailure(error: LocalAgentError): ChatError {
     agent_failed: "本地 Agent 本轮没有返回可用结果。请重试，或到「接入 AI」检查当前连接。",
     agent_empty_output: "本地 Agent 本轮没有返回可用结果。请重试，或到「接入 AI」检查当前连接。",
     agent_start_failed: "本地 Agent 本轮没有返回可用结果。请重试，或到「接入 AI」检查当前连接。",
+    agent_model_unavailable: "OpenCode 里当前默认的模型连不上（地区或服务商限制）。请在终端 opencode 里换一个可用模型，或把 opencode.json 里默认 model 改好后再试。",
   };
   return new ChatError(
     error.code,

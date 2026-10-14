@@ -20,7 +20,7 @@ type Complete = (agent: LocalAgentId, options: RunLocalAgentOptions) => Promise<
 const FATAL_LOCAL_AGENT_ERRORS = new Set([
   "agent_not_installed", "agent_not_authenticated", "agent_probe_failed",
   "agent_cli_too_old", "unsupported_cli", "agent_bad_timeout", "agent_quota",
-  "agent_shutdown_failed",
+  "agent_shutdown_failed", "agent_model_unavailable",
 ]);
 
 /** 剩余时间少于这个数就不再起续跑会话(冷启动 + 重读产物都不够) */

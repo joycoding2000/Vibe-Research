@@ -55,6 +55,7 @@ const SAFE_AGENT_MESSAGE_CODES = new Set([
   "chat_engine_unsupported", "chat_engine_missing", "chat_capacity", "chat_busy", "chat_cancelled", "timeout",
   "agent_quota", "agent_not_installed", "agent_busy", "agent_timeout", "agent_output_too_large",
   "agent_bad_output", "agent_failed", "agent_empty_output", "agent_cancelled", "agent_start_failed",
+  "agent_model_unavailable",
   "tool_context_too_large", "bad_agent_output", "guided_output_blocked", "bad_tool_args", "bad_tool",
   "bad_agent_state", "not_found", "tool_failed", "debate_source_changed", "debate_exists", "debate_busy",
   "invalid_task_request", "invalid_task", "invalid_material_resolution", "material_resolution_failed",
