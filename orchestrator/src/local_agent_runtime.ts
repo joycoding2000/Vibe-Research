@@ -494,12 +494,13 @@ function npmShimEntry(bin: string, platform: NodeJS.Platform = process.platform)
     const source = fs.readFileSync(bin, "utf8").replace(/\r\n/g, "\n");
     if (!source.startsWith("#!/usr/bin/env pwsh\n") ||
       !source.includes("$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n")) return null;
-    // node shim 的目标在第二个引号段;exe shim 的目标($basedir/…exe)与 $args 同处一个引号段
+    // node shim 的目标在第二个引号段;exe shim 的目标($basedir/…exe)与 $args 同处一个引号段。
+    // npm 对带分支的 wrapper($input | ... 两种调用路径)会重复写同一目标 —— 去重后唯一才算。
     const target = (() => {
       const node = [...source.matchAll(/(?:\$input\s*\|\s*)?&\s+"(?:\$basedir\/)?node\$exe"\s+"\$basedir\/([^"\r\n]+)"\s+\$args\b/g)].map((m) => m[1]!);
       const exe = [...source.matchAll(/(?:\$input\s*\|\s*)?&\s+"\$basedir\/([^"\r\n]+\.exe)"\s+\$args\b/gi)].map((m) => m[1]!);
       const all = [...node, ...exe];
-      return all.length === 1 ? all[0]! : null;
+      return all.length >= 1 && new Set(all).size === 1 ? all[0]! : null;
     })();
     if (!target || /[$`]/.test(target)) return null;
     // 目标不存在时不放行;resolve 出的路径再查一次真实文件(stateSync 是边界)

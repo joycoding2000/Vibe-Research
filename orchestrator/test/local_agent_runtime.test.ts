@@ -1285,6 +1285,34 @@ test("OpenCode 受控配置:内建工具全 deny + 产品 MCP 精确 allow,系�
     (e: unknown) => e instanceof LocalAgentError && e.code === "agent_bad_mcp");
 });
 
+test("Windows:opencode 的 npm exe 包装器(两个分支重复同一 target)也解析出包内 exe", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vra-oc-shim-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const pkgBin = path.join(dir, "node_modules", "opencode-ai", "bin", "opencode.exe");
+  fs.mkdirSync(path.dirname(pkgBin), { recursive: true });
+  fs.writeFileSync(pkgBin, "MZ");   // 占位:NZ 内容不参与执行,只验解析与存在性
+  const ps1 = path.join(dir, "opencode.ps1");
+  fs.writeFileSync(ps1, [
+    "#!/usr/bin/env pwsh",
+    "$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent",
+    "",
+    '$exe=""',
+    "if ($PSVersionTable.PSVersion -lt \"6.0\" -or $IsWindows) {",
+    '  $exe=".exe"',
+    "}",
+    "# Support pipeline input",
+    "if ($MyInvocation.ExpectingInput) {",
+    '  $input | & "$basedir/node_modules/opencode-ai/bin/opencode.exe"   $args',
+    "} else {",
+    '  & "$basedir/node_modules/opencode-ai/bin/opencode.exe"   $args',
+    "}",
+    "exit $LASTEXITCODE",
+  ].join("\n") + "\n");
+  const launch = executableInvocation(ps1, ["--version"], {}, "win32");
+  assert.equal(launch.file, pkgBin);
+  assert.deepEqual(launch.args, ["--version"]);
+});
+
 test("OpenCode 参数:--pure --format json --agent,argv 不带用户正文", () => {
   const args = opencodeArgs();
   assert.deepEqual(args, ["run", "--pure", "--format", "json", "--agent", "vra-agent"]);
