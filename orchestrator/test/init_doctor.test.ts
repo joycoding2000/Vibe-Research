@@ -45,7 +45,7 @@ function tmpDoctorRepo(): string {
   return repo;
 }
 
-const AGENT_NAMES = { "cli-claude": "Claude Code", "cli-codex": "Codex", "cli-codebuddy": "WorkBuddy / CodeBuddy" } as const;
+const AGENT_NAMES = { "cli-claude": "Claude Code", "cli-codex": "Codex", "cli-codebuddy": "WorkBuddy / CodeBuddy", "cli-opencode": "OpenCode" } as const;
 function agent(provider: LocalAgentStatus["provider"], status: LocalAgentStatus["status"]): LocalAgentStatus {
   const ready = status === "ready";
   return { provider, name: AGENT_NAMES[provider], installed: status !== "not_installed", authenticated: ready, available: ready,

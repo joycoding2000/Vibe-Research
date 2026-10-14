@@ -1,7 +1,7 @@
 /**
  * Phase 0 第 6 步:6 组硬测试(开发方案 v2 §12)+ 收工检查硬验收——机器可判定(按历次审查收紧)。
  * 用法:node orchestrator/src/finance/hardtest.ts --batch ht1 --python <venv>/bin/python [--provider <AI 来源>] [--only c1,conflict,...] [--lanes 2] [--judge-only]
- *   --provider:cli-claude / cli-codex / cli-codebuddy 或 providers/ 里的模型 API 模板 id;不传 = 后台默认 AI 来源
+ *   --provider:cli-claude / cli-codex / cli-codebuddy / cli-opencode 或 providers/ 里的模型 API 模板 id;不传 = 后台默认 AI 来源
  * 每个测试 = 一次真实运行(spawn run.ts,带 --scenario)+ 只读运行目录的纯函数 judge(不认 agent 自述;能骗过的写法都算失败);
  * 结果增量写 <data_root>/hardtests/<batch>/{results.json,summary.md}。judge-only 只重判"本批次、已完成、scenario 一致"的运行。
  */
@@ -444,7 +444,7 @@ export function runCompleted(m: ReturnType<typeof readManifest>, exitCode?: numb
   return { ok: m.status === "complete" && code === 0, detail: `${m.status} / ${code}` };
 }
 
-/** provider:这批测试用哪个大脑(cli-claude / cli-codex / cli-codebuddy / 模型 API 模板 id);不传 = 后台默认 */
+/** provider:这批测试用哪个大脑(cli-claude / cli-codex / cli-codebuddy / cli-opencode / 模型 API 模板 id);不传 = 后台默认 */
 export function runOne(repoRoot: string, python: string, runId: string, t: HardTest, batchDir: string, seedFrom?: string, provider?: string): Promise<{ runDir: string; exit: number | null; log: string; timed_out: boolean; error?: string }> {
   const args = [path.join(repoRoot, "orchestrator", "src", "run.ts"), "--symbol", t.symbol ?? "300308", "--market", t.market ?? "SZ", "--python", python, "--run-id", runId, "--overwrite"];
   if (provider) args.push("--provider", provider);

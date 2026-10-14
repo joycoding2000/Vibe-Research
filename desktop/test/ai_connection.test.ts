@@ -8,13 +8,13 @@ import { aiConnectionLabel, subscriptionConfig, testAndSaveAi } from "../src/ver
 
 test("接入标签按来源显示，不泄露模型密钥或地址", () => {
   for (const status of ["none", "broken", "unavailable"] as const) assert.equal(aiConnectionLabel({ status, config: null }), "未接入AI，请设置");
-  for (const [provider, label] of Object.entries({ "cli-codex": "Codex订阅版", "cli-claude": "Claude订阅", "cli-codebuddy": "WorkBuddy CLI", deepseek: "DeepSeek API", mimo: "MiMo API", "openai-compatible": "自定义 API" })) {
+  for (const [provider, label] of Object.entries({ "cli-codex": "Codex订阅版", "cli-claude": "Claude订阅", "cli-codebuddy": "WorkBuddy CLI", "cli-opencode": "OpenCode", deepseek: "DeepSeek API", mimo: "MiMo API", "openai-compatible": "自定义 API" })) {
     assert.equal(aiConnectionLabel({ status: "ok", config: { schemaVersion: 2, source: { provider, apiKey: "secret", baseURL: "private", model: "model" } } }), `已接入AI：${label}`);
   }
 });
 
-test("三个快捷订阅使用现有来源，探针通过前不保存", async () => {
-  for (const provider of ["cli-codex", "cli-claude", "cli-codebuddy"]) {
+test("各快捷订阅使用现有来源，探针通过前不保存", async () => {
+  for (const provider of ["cli-codex", "cli-claude", "cli-codebuddy", "cli-opencode"]) {
     const cfg = subscriptionConfig(provider);
     let saves = 0;
     await testAndSaveAi(cfg, { read: () => null, probe: async (input) => { assert.deepEqual(input, cfg); assert.equal(saves, 0); return { ok: true }; }, save: (input) => { assert.deepEqual(input, cfg); saves++; } });
@@ -58,6 +58,6 @@ test("API 档预设与 providers/ 模板一致：预填地址相同、模板的�
 });
 
 test("订阅档用的是用户自己登录好的 CLI：不再出现 v1 的「产品自带引擎 / 产品专用登录」，也不替用户推荐某一家", () => {
-  assert.deepEqual(SUBSCRIPTION_MODELS.map((m) => m.provider), ["cli-codex", "cli-claude", "cli-codebuddy"]);
+  assert.deepEqual(SUBSCRIPTION_MODELS.map((m) => m.provider), ["cli-codex", "cli-claude", "cli-codebuddy", "cli-opencode"]);
   for (const m of SUBSCRIPTION_MODELS) assert.doesNotMatch(m.description, /产品自带|产品专用|推荐/, m.name);
 });

@@ -532,7 +532,7 @@ node orchestrator/src/run.ts \
   --python "$(pwd)/.venv/bin/python" < /dev/null
 ```
 
-`--provider` picks the AI for the run: `cli-claude` / `cli-codex` / `cli-codebuddy` use a locally signed-in
+`--provider` picks the AI for the run: `cli-claude` / `cli-codex` / `cli-codebuddy` / `cli-opencode` use a locally signed-in
 subscription, and a template id such as `deepseek` uses a model API (the key comes from the environment variable the
 template declares, such as `DEEPSEEK_API_KEY`). Without it, the backend default applies (`provider.profile` in
 `.local/config.json` or the `VRA_PROVIDER` environment variable); if neither is set, the run fails instead of picking

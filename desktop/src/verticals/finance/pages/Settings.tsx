@@ -43,6 +43,7 @@ function runtimeLabel(provider?: string): string {
   if (provider === "cli-codex") return "Codex Agent";
   if (provider === "cli-claude") return "Claude Code Agent";
   if (provider === "cli-codebuddy") return "WorkBuddy / CodeBuddy Agent";
+  if (provider === "cli-opencode") return "OpenCode Agent";
   return "模型 API · 产品内置工具循环";
 }
 
@@ -285,8 +286,9 @@ export function Settings() {
     ? "等待连接 AI"
     : runtimeLabel(runtime.config?.source.provider);
   const selectedProvider = runtime.config?.source.provider ?? "";
-  const localSubscriptionRuntime = configured && ["cli-codex", "cli-claude", "cli-codebuddy"].includes(selectedProvider);
-  const localRuntimeName = selectedProvider === "cli-codebuddy" ? "WorkBuddy / CodeBuddy" : selectedProvider === "cli-codex" ? "Codex" : "Claude Code";
+  const localSubscriptionRuntime = configured && ["cli-codex", "cli-claude", "cli-codebuddy", "cli-opencode"].includes(selectedProvider);
+  const localRuntimeName = selectedProvider === "cli-codebuddy" ? "WorkBuddy / CodeBuddy"
+    : selectedProvider === "cli-codex" ? "Codex" : selectedProvider === "cli-opencode" ? "OpenCode" : "Claude Code";
   const runtimeFeatures = localSubscriptionRuntime
     ? [
         { icon: Terminal, title: "本地对话", text: `使用 ${localRuntimeName} 登录账号` },
@@ -370,18 +372,19 @@ export function Settings() {
         {mode === "subscription" ? (
           <div className="space-y-3 text-sm">
             <p className="text-xs leading-relaxed text-muted-foreground">
-              状态来自这台机器的实时检测。Codex、Claude Code 与 WorkBuddy / CodeBuddy 都用你自己已经登录好的 CLI 作答，
+              状态来自这台机器的实时检测。Codex、Claude Code、WorkBuddy / CodeBuddy 与 OpenCode 都用你自己已经登录好的 CLI 作答，
               <b className="text-foreground">不会悄悄换成别家</b>；登录凭据留在各自的 CLI 里，本产品不读取也不保存。
               Qwen Code 当前需 API key / Coding Plan，DeepSeek CLI 也需 API key，放在右侧 API 接入。
             </p>
             <p className="rounded-lg border border-border/60 bg-muted/25 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
               已安装并登录 WorkBuddy 桌面版时会直接识别，不需要重复安装或登录 CLI；独立使用 CodeBuddy Code 的用户也可沿用现有 CLI 登录。
+              OpenCode 走你在终端里配置好的模型（opencode auth login）；它的会话记录保存在你自己的 OpenCode 数据目录里，本产品不读取。
             </p>
             <p className="rounded-lg border border-warning/25 bg-warning/[0.05] px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-              三家都可运行对话、有界材料任务和六阶段个股研究；研究阶段只开放产品受控的数据工具（MCP）。
+              四家都可运行对话、有界材料任务和六阶段个股研究；研究阶段只开放产品受控的数据工具（MCP）。
             </p>
             {agentErr && <p className="rounded-lg border border-destructive/30 bg-destructive/[0.06] px-3 py-2 text-xs text-destructive">本机 Agent 状态检测失败：{agentErr}</p>}
-            <div className="grid gap-2 sm:grid-cols-3">
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {SUBSCRIPTION_MODELS.map((m) => {
                 const on = cliId === m.id;
                 const detected = agentOf(m.provider);
@@ -438,6 +441,22 @@ export function Settings() {
                   : codebuddy?.status === "probe_failed"
                     ? <>已检测到 WorkBuddy / CodeBuddy，但当前版本无法建立受限连接：请先更新 WorkBuddy 或官方 CLI。</>
                     : <>正在检测本机 CodeBuddy 状态…</>;
+              return (
+                <p className="rounded-lg border border-border/60 bg-muted/25 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+                  {help}
+                </p>
+              );
+            })()}
+            {(() => {
+              const opencode = agentOf("cli-opencode");
+              if (opencode?.status === "ready") return null;
+              const help = opencode?.status === "not_authenticated"
+                ? <>已检测到 OpenCode，但里面还没有配置好的模型：请在终端运行 <span className="font-mono">opencode auth login</span> 配置模型凭据。</>
+                : opencode?.status === "not_installed"
+                  ? <>尚未检测到 OpenCode CLI：运行 <span className="font-mono">npm install -g opencode-ai</span> 安装官方 CLI，再用 <span className="font-mono">opencode auth login</span> 配置模型。</>
+                  : opencode?.status === "probe_failed"
+                    ? <>已检测到 OpenCode CLI，但状态检测没有通过：请更新 OpenCode 后再点「重新检测」。</>
+                    : <>正在检测本机 OpenCode 状态…</>;
               return (
                 <p className="rounded-lg border border-border/60 bg-muted/25 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
                   {help}
@@ -610,7 +629,7 @@ export function Settings() {
                 <span className="font-mono text-xs">VRA_PROVIDER</span>:模型 API 填模板名(见{" "}
                 <span className="font-mono text-xs">providers/</span> 目录),本机订阅填{" "}
                 <span className="font-mono text-xs">cli-claude</span> / <span className="font-mono text-xs">cli-codex</span> /{" "}
-                <span className="font-mono text-xs">cli-codebuddy</span>
+                <span className="font-mono text-xs">cli-codebuddy</span> / <span className="font-mono text-xs">cli-opencode</span>
               </li>
               <li>用模型 API 时,在启动服务的那个终端里 <span className="font-mono text-xs">export</span> 该模板要求的密钥变量</li>
               <li>重启服务;回到这一页看「凭据就绪」</li>

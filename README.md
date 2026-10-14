@@ -532,7 +532,7 @@ node orchestrator/src/run.ts \
   --python "$(pwd)/.venv/bin/python" < /dev/null
 ```
 
-`--provider` 指定这次研究用的 AI：`cli-claude` / `cli-codex` / `cli-codebuddy` 用本机已登录的订阅，`deepseek` 等模板 id 用模型 API
+`--provider` 指定这次研究用的 AI：`cli-claude` / `cli-codex` / `cli-codebuddy` / `cli-opencode` 用本机已登录的订阅，`deepseek` 等模板 id 用模型 API
 （key 从模板声明的环境变量读，如 `DEEPSEEK_API_KEY`）。不传就用后台默认（`.local/config.json` 的 `provider.profile` 或环境变量
 `VRA_PROVIDER`），都没有会直接报错，不会替你选。
 

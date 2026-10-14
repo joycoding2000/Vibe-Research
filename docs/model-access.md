@@ -1,13 +1,13 @@
 # 模型接入指南(v2)
 
-本文讲清:选哪种 AI 来源、Agent 开关是什么、三家本机订阅怎么接、模型 API 怎么接与怎么验证、怎么加一家新的 provider。
+本文讲清:选哪种 AI 来源、Agent 开关是什么、四家本机订阅怎么接、模型 API 怎么接与怎么验证、怎么加一家新的 provider。
 
 后端默认来源的 key 只放环境变量;浏览器里由用户填写的 key 会持久保存在当前浏览器的本机 `localStorage`,以免每次重填。`localStorage` 按地址分开:默认端口被占、启动器换了页面端口时,新地址里看不到原来的设置,要重新填一次;默认端口空出来后重启就回到原来的地址和设置。
 它不是系统钥匙串,也不承诺加密,只建议在可信个人电脑使用;共享电脑用完应主动清除。
 调用时 key 随本轮请求交给本机后端,但不会写入产品配置、日志、事件账本或研究产物。
 
 > v2.0 起产品不再内置 Codex Harness,也不再有产品专用的 Codex 登录(`.local/codex-home`)。
-> 三家订阅都直接用你自己在本机装好、登录好的 CLI;模型 API 一律走 Chat Completions。v1 的接入记录见文末「v1 历史记录」。
+> 各家订阅都直接用你自己在本机装好、登录好的 CLI;模型 API 一律走 Chat Completions。v1 的接入记录见文末「v1 历史记录」。
 
 ## 1. 选 AI 来源
 
@@ -16,6 +16,7 @@
 | Codex 订阅 | ChatGPT 订阅用户 | 安装 Codex CLI,终端运行 `codex login` 用 ChatGPT 账号登录 → 「接入 AI」测试并保存 | 用你自己的 Codex 登录(`CODEX_HOME`,缺省 `~/.codex`);产品只问「是否用 ChatGPT 登录」,不读 `auth.json`;用 API key 登录的 Codex 不算订阅 |
 | Claude 订阅 | claude.ai 订阅用户 | 安装 Claude Code,运行 `claude` 完成 `/login` → 测试并保存 | 只认 claude.ai 订阅登录(API key / Bedrock / Vertex 不算);外壳里的 API key 环境变量不会带进 CLI,避免计费方被悄悄换掉 |
 | WorkBuddy / CodeBuddy | WorkBuddy 桌面版或 CodeBuddy Code CLI 用户 | 桌面版已登录则直接识别;独立 CLI 运行 `codebuddy` 登录 → 测试并保存 | Windows 装在别的盘会从「已安装的程序」登记或运行中的 WorkBuddy 自动找到;仍找不到时在 WorkBuddy 卡片里填安装文件夹,或设环境变量 `CODEBUDDY_BIN` |
+| OpenCode 订阅 | 在 OpenCode 里配置过模型凭据的用户 | 安装 OpenCode CLI(需 ≥ `1.19.0`),运行 `opencode auth login` 按提示选择服务商与凭据 → 测试并保存 | 用你在 OpenCode 里已配置好的模型(任意模型网关,登录与凭据都在 OpenCode 自己的数据目录);产品不读 `auth.json`,也不区分 OAuth 与 API key —— 卡片如实说「已配置好的模型」。会话记录留在你自己的 OpenCode 数据目录 |
 | 模型 API | 任意 OpenAI 兼容 Chat Completions 服务(DeepSeek / 通义千问 / 智谱 GLM / Kimi / MiMo / OpenAI / 自托管…) | 浏览器「接入 AI」→「API 接入」填写;命令行用 `export <ENV_KEY>=...` + `--provider <id>` | 浏览器 key 存在本机浏览器配置,调用时才发给本机后端;命令行 / 后台默认从模板声明的环境变量读 key |
 
 - 每种来源保存前都要先做一次真实对话测试;失败不覆盖当前已生效配置。
@@ -73,6 +74,17 @@
   Claude Code 与 Codex 同理可用 `CLAUDE_BIN` / `CODEX_BIN`。
 - 桌面版内置的旧 CLI 若没有「禁止会话落盘」参数,整次回答改在一次性临时用户目录运行,所需的订阅凭据只在进程内转交,结束后随临时目录删除。
 
+### OpenCode 订阅
+
+1. 安装 OpenCode CLI(需 ≥ `1.19.0`):`npm install -g opencode-ai`。
+2. 运行 `opencode auth login`,按提示选服务商并完成凭据(订阅 OAuth 或 API key 都存在 OpenCode 自己的数据目录;这一步由你自己完成,产品不经手)。
+3. 显示「可用」后点「测试并保存」。模型由你在 OpenCode 里的配置决定,产品不传模型名。
+
+- 产品经环境变量 `OPENCODE_CONFIG_CONTENT` 内联注入受控配置:内建工具全 `deny`、只放行产品 MCP 工具、`--pure` 排除外挂插件;不读也不改你的 `opencode.json`。
+- **会话会落盘**:OpenCode 目前没有「禁止会话落盘」的开关,每种会话(包括研究阶段)都会写进你自己的 OpenCode 数据目录(`~/.local/share/opencode/`)。这是它与你其它三种订阅 CLI 的主要差异,介意请勿使用这一档。
+- 自动定位同 `opencode` 命令;装在别的位置可用环境变量 `OPENCODE_BIN` 指定。
+- OpenCode 里只剩环境变量连接(没有真实登录凭据)时不算已登录,卡片会提示运行 `opencode auth login`。
+
 ## 3. 模型 API
 
 ### 在页面里接
@@ -103,7 +115,7 @@ node orchestrator/src/run.ts --symbol 300308 --market SZ --provider deepseek --p
 ```
 
 或设环境变量 `VRA_PROVIDER=deepseek`;还没有这份配置时也可以运行 `scripts/init --provider deepseek` 生成
-(已有配置时 init 不改它,会提示 `--provider` 未生效;加 `--force` 会先备份,再把整份配置重写成骨架)。本机订阅也可以当后台默认:`cli-claude` / `cli-codex` / `cli-codebuddy`。
+(已有配置时 init 不改它,会提示 `--provider` 未生效;加 `--force` 会先备份,再把整份配置重写成骨架)。本机订阅也可以当后台默认:`cli-claude` / `cli-codex` / `cli-codebuddy` / `cli-opencode`。
 优先级(低 → 高):产品配置 ← `<数据根>/config.json` ← 环境变量 `VRA_PROVIDER` ← CLI `--provider`。
 
 **页面不读后台默认**:页面每次请求都自带使用者在「接入 AI」里选的来源;后台默认只给命令行研究、批量运行和直接调用本机接口(MCP)的 Agent 用。
@@ -187,6 +199,8 @@ v1 的旧引擎字段(`wire_api`、`auth_modes`、`responses_support`、`http_he
 - **报「还没有选择 AI 来源」**:命令行研究 / 批量运行 / MCP 的 `start_research` 用后台默认;用 `--provider` 指定,或按第 3 节设后台默认。
 - **Codex 卡片提示「当前用 API key 登录」**:这张卡片只走 ChatGPT 订阅。在终端运行 `codex login` 改用 ChatGPT 登录,再点「重新检测」。
 - **Claude 卡片显示未登录,但 `claude` 在终端能用**:多半是 API key / Bedrock / Vertex 登录,不算 claude.ai 订阅。要用订阅请在 `claude` 里 `/login`;要用 API key 请走模型 API。
+- **OpenCode 卡片显示未登录,但 `opencode` 在终端能用**:OpenCode 里没有已登录的凭据(只有环境变量连接)时不算。运行 `opencode auth login` 配置凭据,再点「重新检测」。
+- **OpenCode 卡片显示「OpenCode CLI 版本过旧,需要 1.19.0 或更新」**:运行 `opencode upgrade` 或重装最新版。
 - **WorkBuddy 显示未安装**:见第 2 节,在卡片里填位置或设 `CODEBUDDY_BIN`。
 - **报「--codex-home 已在 v2.0 移除」等**:v1 的参数一律报错并说明改法;用 `--provider` 选大脑。
 - **体检报「v1 旧配置残留」**:`.local/config.json` 里有 v1 字段(`engine.*`、`provider.auth` 等),v2 已不用,删掉即可(或 `scripts/init --force` 重写骨架,会先备份)。

@@ -2,7 +2,7 @@
 /**
  * 薄编排器 CLI 入口。
  * 用法:node orchestrator/src/run.ts --symbol 300308 [--run-id X] [--python /path/python]
- *      [--provider <AI 来源>](cli-claude / cli-codex / cli-codebuddy = 本机已登录的订阅 Agent;其余 = providers/<id>.json 模型 API 模板,
+ *      [--provider <AI 来源>](cli-claude / cli-codex / cli-codebuddy / cli-opencode = 本机已登录的订阅 Agent;其余 = providers/<id>.json 模型 API 模板,
  *                             key 从模板声明的环境变量读)。不传就用后台默认(<数据根>/config.json 的 provider.profile 或环境变量 VRA_PROVIDER);
  *                             都没有就报错 —— 产品不替你选大脑
  *      [--model m](只对模型 API 有效;本机订阅 Agent 的模型由已登录的 CLI 自己决定,产品不传模型参数)
@@ -31,7 +31,7 @@ import { ProgressReporter } from "./progress.ts";
 import { runResearch, type Deps } from "./orchestrate.ts";
 import { loadProductConfig } from "./productConfig.ts";
 import { REQUEST_LLM_META_VAR, parseRequestLlmMeta, resolveRuntimeProvider, resolveSelectedRuntime, type ResolvedRuntimeProvider } from "./runtime_provider.ts";
-import { loadSavedAgentPaths, probeClaude, probeCodeBuddy, probeCodex, type LocalAgentId, type LocalAgentStatus } from "./local_agent_runtime.ts";
+import { loadSavedAgentPaths, probeClaude, probeCodeBuddy, probeCodex, probeOpenCode, type LocalAgentId, type LocalAgentStatus } from "./local_agent_runtime.ts";
 import { isStage } from "./schemas.ts";
 import { verifyCalcs } from "./validator.ts";
 
@@ -91,7 +91,7 @@ const REMOVED_FLAGS: Record<string, string> = {
   "codex-home": "v2 不再有产品专用的 CODEX_HOME;cli-codex 直接用你自己的 Codex 登录(CODEX_HOME 环境变量照常生效)",
   "no-hooks": "v2 没有引擎钩子;收工检查由产品自己执行,对所有大脑都生效,不能关闭",
   "execution-mode": "v2 所有大脑都只走产品受控工具,不再区分 shell_hooks / controlled_mcp",
-  "engine": "v2 用 --provider 选大脑:cli-claude / cli-codex / cli-codebuddy 或 providers/ 里的模型 API 模板 id",
+  "engine": "v2 用 --provider 选大脑:cli-claude / cli-codex / cli-codebuddy / cli-opencode 或 providers/ 里的模型 API 模板 id",
   "experimental-direct-deep": "模型 API 现在是正式的六阶段大脑,用 --provider <模板 id> 即可,不需要实验开关",
   "auth": "v2 的认证方式由 AI 来源决定:本机订阅 Agent 用你自己的 CLI 登录,模型 API 用模板声明的环境变量里的 key",
   "reasoning": "v2 不再转发推理档位;模型 API 用模板默认,本机订阅 Agent 由各 CLI 按自身默认决定(产品以隔离参数启动,Codex 不读你的 config.toml)",
@@ -206,7 +206,7 @@ export function configFromArgs(args: Record<string, string | boolean>, env: Node
 }
 
 const PROBES: Record<LocalAgentId, (env: NodeJS.ProcessEnv) => Promise<LocalAgentStatus>> = {
-  claude: probeClaude, codex: probeCodex, codebuddy: probeCodeBuddy,
+  claude: probeClaude, codex: probeCodex, codebuddy: probeCodeBuddy, opencode: probeOpenCode,
 };
 
 /**

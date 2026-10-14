@@ -74,7 +74,7 @@ VRA_DATA_ROOT="$PWD/.local/dev-validation" node orchestrator/src/run.ts \
   --max-retries 0 --turn-timeout-min 5 --knowledge off --no-archive < /dev/null
 ```
 
-- 换来源只改 `--provider`：`cli-codex`(要求 Codex 用 ChatGPT 登录)、`cli-codebuddy`；
+- 换来源只改 `--provider`：`cli-codex`(要求 Codex 用 ChatGPT 登录)、`cli-codebuddy`、`cli-opencode`(要求 OpenCode 里已配置模型,需 ≥ 1.19.0)；
   模型 API 先 `export <模板 env_key>=...` 并跑 `node orchestrator/src/finance/provider_matrix.ts --provider <id>`，
   再用 `--provider <id> --model <实际模型名>`。
 - 每次使用新的 `--run-id`；不覆盖既有产物。数据、事件和失败尝试留在 ignored 的 `.local/`。

@@ -22,7 +22,7 @@ export type ProviderId =
   | "deepseek" | "silicon" | "openai-api" | "minimax" | "openrouter"
   | "groq" | "together" | "mimo" | "glm" | "kimi" | "qwen"
   | "openai-compatible"
-  | "cli-codex" | "cli-claude" | "cli-codebuddy";
+  | "cli-codex" | "cli-claude" | "cli-codebuddy" | "cli-opencode";
 
 export interface ModelConfig {
   /** 真正传给引擎的 model 名 */
@@ -65,6 +65,7 @@ export const AI_MODELS: ModelConfig[] = [
   { id: "codex", name: "Codex 订阅", description: "用本机 Codex CLI 的 ChatGPT 登录，免 API key", provider: "cli-codex" },
   { id: "claude-code", name: "Claude Code", description: "用本机 Claude Code 的订阅登录，免 API key", provider: "cli-claude" },
   { id: "codebuddy", name: "WorkBuddy / CodeBuddy", description: "用本机 CodeBuddy 已登录账号，免 API key", provider: "cli-codebuddy" },
+  { id: "opencode", name: "OpenCode 订阅", description: "用你在本机 OpenCode 已配置好的模型，免 API key", provider: "cli-opencode" },
 
   // —— API 档（填自己的 key）。带模板的排前面；模型名与 providers/*.json 的说明一致 ——
   { id: "deepseek-flash", name: "DeepSeek V4.1 Flash", description: "DeepSeek 官方 · 快而省", provider: "deepseek" },

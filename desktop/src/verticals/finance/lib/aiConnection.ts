@@ -2,7 +2,7 @@ import { SUBSCRIPTION_MODELS } from "./ai-models.ts";
 import type { AiRuntimeRead, LlmConfig } from "./llmStore.ts";
 
 const SOURCE_LABELS: Record<string, string> = {
-  "cli-codex": "Codex订阅版", "cli-claude": "Claude订阅", "cli-codebuddy": "WorkBuddy CLI",
+  "cli-codex": "Codex订阅版", "cli-claude": "Claude订阅", "cli-codebuddy": "WorkBuddy CLI", "cli-opencode": "OpenCode",
   deepseek: "DeepSeek API", mimo: "MiMo API", "openai-api": "OpenAI API", silicon: "硅基流动 API",
   minimax: "MiniMax API", openrouter: "OpenRouter API", groq: "Groq API", together: "Together API",
   glm: "智谱 GLM API", kimi: "Kimi API", qwen: "通义千问 API",

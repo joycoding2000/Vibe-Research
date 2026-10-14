@@ -17,7 +17,7 @@ import path from "node:path";
 import { CONSTITUTION_REL } from "./config.ts";
 import { NOFOLLOW_FLAG, nowIso, privateFilePermissions, readJsonIfExists, sha256File, writeJson } from "./fsutil.ts";
 import { assertDataRootInside, detectPython, gitignoreCovers, resolveDataRoot } from "./init.ts";
-import { loadSavedAgentPaths, probeClaude, probeCodeBuddy, probeCodex, type LocalAgentStatus } from "./local_agent_runtime.ts";
+import { loadSavedAgentPaths, probeClaude, probeCodeBuddy, probeCodex, probeOpenCode, type LocalAgentStatus } from "./local_agent_runtime.ts";
 import { loadProductConfig, type LoadedProductConfig } from "./productConfig.ts";
 import { parseArgs } from "./run.ts";
 import { isCliProvider, resolveSelectedRuntime, RuntimeProviderError } from "./runtime_provider.ts";
@@ -73,6 +73,7 @@ const AGENT_FIX: Record<LocalAgentStatus["provider"], string> = {
   "cli-claude": "安装 Claude Code 后在终端运行 claude 并完成 /login",
   "cli-codex": "安装 Codex CLI(npm install -g @openai/codex)后在终端运行 codex login",
   "cli-codebuddy": "安装 WorkBuddy(或 CodeBuddy CLI)并在其中登录",
+  "cli-opencode": "安装 OpenCode CLI(npm install -g opencode-ai)后在终端运行 opencode auth login 配置模型",
 };
 
 /** 子进程最小环境:基础 + 代理 + 证书(不透传任何密钥类变量) */
@@ -210,7 +211,7 @@ export async function runDoctor(opts: {
   let agents: LocalAgentStatus[] = [];
   let probeError = "";
   if (dataRootOk) loadSavedAgentPaths(dataRoot);  // 设置页手动指定的 WorkBuddy 位置也要算进体检
-  try { agents = await (opts.probeAgents ?? ((e) => Promise.all([probeClaude(e), probeCodex(e), probeCodeBuddy(e)])))(env); }
+  try { agents = await (opts.probeAgents ?? ((e) => Promise.all([probeClaude(e), probeCodex(e), probeCodeBuddy(e), probeOpenCode(e)])))(env); }
   catch (e) { probeError = sub(e instanceof Error ? e.message : String(e)); }
   // 3a. 后台默认 AI 来源(命令行研究 / 批量运行用;页面每次请求自带所选来源,不依赖它)
   let defaultUsable = false;
@@ -219,7 +220,7 @@ export async function runDoctor(opts: {
   else if (!profile) add({ id: "ai_default", title: "后台默认 AI 来源", status: "skip", detail: "未设。页面每次请求自带所选来源,不受影响;命令行研究 / 批量运行需要 --provider,或在 .local/config.json 写 provider.profile" });
   else if (isCliProvider(profile)) {
     const a = agents.find((x) => x.provider === profile);
-    if (!a) add({ id: "ai_default", title: "后台默认 AI 来源", status: "fail", detail: probeError ? `${profile}:登录状态检测失败(${probeError})` : `${profile} 不是支持的本机订阅 Agent(只支持 cli-claude / cli-codex / cli-codebuddy)`, fix: "改成支持的来源,或换成 providers/ 里的模型 API 模板" });
+    if (!a) add({ id: "ai_default", title: "后台默认 AI 来源", status: "fail", detail: probeError ? `${profile}:登录状态检测失败(${probeError})` : `${profile} 不是支持的本机订阅 Agent(只支持 cli-claude / cli-codex / cli-codebuddy / cli-opencode)`, fix: "改成支持的来源,或换成 providers/ 里的模型 API 模板" });
     else {
       defaultUsable = a.available;
       add({ id: "ai_default", title: "后台默认 AI 来源", status: a.available ? "ok" : "fail", detail: `${profile}(${a.name}${a.version ? ` ${a.version}` : ""}):${a.detail}`, fix: a.available ? undefined : AGENT_FIX[a.provider] });

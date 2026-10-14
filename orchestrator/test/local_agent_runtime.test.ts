@@ -16,17 +16,20 @@ const PLATFORM_ENV: NodeJS.ProcessEnv = process.platform === "win32"
 import {
   CodexEventStream, LocalAgentError, claudeArgs, codeBuddyArgs, codexArgs, codexVersionSupported, findExecutable, parseClaudeOutput,
   executableInvocation, normalizeLocalAgentTimeoutMs, parseCodeBuddyOutput, parseCodexLoginStatus, parseCodexVersion,
-  probeClaude as realProbeClaude, probeCodeBuddy as realProbeCodeBuddy, probeCodex as realProbeCodex, runLocalAgent as realRunLocalAgent,
+  probeClaude as realProbeClaude, probeCodeBuddy as realProbeCodeBuddy, probeCodex as realProbeCodex, probeOpenCode as realProbeOpenCode,
+  runLocalAgent as realRunLocalAgent,
   terminateActiveLocalAgentProcesses, tomlString, workBuddyCliCandidates,
   localAgentInput, localSubscriptionEnv,
   AGENT_PATHS_FILE, codeBuddyLocationCandidates, codeBuddyNativeCandidates, codeBuddyPathFlags, executableCandidates, loadSavedAgentPaths, resolveCodeBuddyLocation, saveCodeBuddyLocation,
   codeBuddyProbeFailure, locateCodeBuddy, resetWorkBuddyDiscoveryForTest, workBuddyBundledCandidates, workBuddyRootsFromDiscovery,
+  MIN_OPENCODE_CLI_VERSION, OpenCodeEventStream, openCodeMcpAction, openCodeRunConfig, openCodeVersionSupported,
+  opencodeArgs, parseOpenCodeAuthList, parseOpenCodeVersion,
 } from "../src/local_agent_runtime.ts";
 
 // Fixture switches use a private sidecar, not the production child environment.
 // A strict allowlist must not gain a FAKE_* bypass just to keep tests passing.
 function fixtureConfig(env: NodeJS.ProcessEnv): void {
-  const bin = env.CLAUDE_BIN ?? env.CODEBUDDY_BIN ?? env.CODEX_BIN;
+  const bin = env.CLAUDE_BIN ?? env.CODEBUDDY_BIN ?? env.CODEX_BIN ?? env.OPENCODE_BIN;
   if (!bin || !path.resolve(bin).startsWith(path.resolve(os.tmpdir()) + path.sep)) return;
   fs.writeFileSync(path.join(path.dirname(bin), "fixture-flags.json"), JSON.stringify(
     Object.fromEntries(Object.entries(env).filter(([key]) => key.startsWith("FAKE_")))));
@@ -34,6 +37,7 @@ function fixtureConfig(env: NodeJS.ProcessEnv): void {
 const probeClaude: typeof realProbeClaude = env => { fixtureConfig(env ?? process.env); return realProbeClaude(env); };
 const probeCodeBuddy: typeof realProbeCodeBuddy = env => { fixtureConfig(env ?? process.env); return realProbeCodeBuddy(env); };
 const probeCodex: typeof realProbeCodex = env => { fixtureConfig(env ?? process.env); return realProbeCodex(env); };
+const probeOpenCode: typeof realProbeOpenCode = env => { fixtureConfig(env ?? process.env); return realProbeOpenCode(env); };
 const runLocalAgent: typeof realRunLocalAgent = (agent, opts) => { fixtureConfig(opts.env ?? process.env); return realRunLocalAgent(agent, opts); };
 
 test("订阅子进程只继承运行必需变量，不继承其它服务密钥或 Node 注入参数", async (t) => {
@@ -1222,4 +1226,227 @@ test("Windows 实机:Squirrel 式安装(程序在 app-<版本> 子文件夹),登
   const env = { ...PLATFORM_ENV, PATH: empty, LOCALAPPDATA: empty, ProgramFiles: empty, "ProgramFiles(x86)": empty };
   assert.equal(samePath(await locateCodeBuddy(env)), samePath(newest));
   assert.equal(samePath(resolveCodeBuddyLocation(root, env)), samePath(newest));
+});
+
+test("OpenCode 版本解析与最低版本闸:低于实测版本不能点亮", () => {
+  assert.equal(parseOpenCodeVersion("1.19.0"), "1.19.0");
+  assert.equal(parseOpenCodeVersion("opencode 1.19.0 (Bun)\n"), "1.19.0");
+  assert.equal(parseOpenCodeVersion("unknown"), null);
+  assert.equal(openCodeVersionSupported("1.19.0"), true);
+  assert.equal(openCodeVersionSupported("2.0.0"), true);
+  assert.equal(openCodeVersionSupported("1.18.9"), false);
+  assert.equal(openCodeVersionSupported(null), false);
+  assert.equal(MIN_OPENCODE_CLI_VERSION, "1.19.0");
+});
+
+test("OpenCode 登录表解析:去 ANSI 后数 stored / environment,读不懂返回 null 由调用方当检测未完成", () => {
+  assert.deepEqual(parseOpenCodeAuthList("No authenticated integrations"), { stored: 0, environment: 0 });
+  assert.deepEqual(parseOpenCodeAuthList("\x1b[90mT\x1b[39m  Credentials\n\x1b[34m\u2022\x1b[39m  OpenCode Go \x1b[90mapi\x1b[39m\n|\n\u2014  1 credentials\nOpenCode Go  api-key-***  stored\n"),
+    { stored: 1, environment: 0 });
+  assert.deepEqual(parseOpenCodeAuthList("Anthropic sk-ant-*** environment\nOpenCode api-*** stored\n"), { stored: 1, environment: 1 });
+  assert.deepEqual(parseOpenCodeAuthList("Anthropic X sk-ant-*** environment\n"), { stored: 0, environment: 1 }, "只有环境变量连接不算登录");
+  assert.equal(parseOpenCodeAuthList(""), null);
+  assert.equal(parseOpenCodeAuthList("标题 行 没有 类型 列"), null);
+});
+
+test("OpenCode MCP 工具 permission action 名与服务的白名单转换一致", () => {
+  assert.equal(openCodeMcpAction("vra", "mcp__vra__read_run_file"), "vra_read_run_file");
+  assert.equal(openCodeMcpAction("vra", "read_run_file"), "vra_read_run_file");
+  assert.equal(openCodeMcpAction("a.b=c", "x"), "a_b_c_x");
+});
+
+test("OpenCode 受控配置:内建工具全 deny + 产品 MCP 精确 allow,系统提示词与结构化 Schema 进内联 agent", () => {
+  const plain = openCodeRunConfig("SYSTEM-PROMPT-MARK") as {
+    agent: Record<string, { prompt: string; permission: Record<string, string>; mode: string }>;
+    permission: Record<string, string>; mcp?: Record<string, unknown>;
+  };
+  assert.equal(plain.agent["vra-agent"].prompt, "SYSTEM-PROMPT-MARK");
+  assert.deepEqual(plain.agent["vra-agent"].permission, { "*": "deny" });
+  assert.equal(plain.agent["vra-agent"].mode, "primary");
+  assert.deepEqual(plain.permission, { "*": "deny" });
+  assert.equal(plain.mcp, undefined);
+
+  const deep = openCodeRunConfig("S", {
+    controlledMcp: { serverName: "vra", command: "node", args: ["run.ts"], env: { V: "1" },
+      allowedTools: ["mcp__vra__read_run_file", "mcp__vra__write_stage"], maxTurns: 8 },
+    outputSchema: { type: "object" },
+  }) as { agent: Record<string, { prompt: string }>; permission: Record<string, string>; mcp: Record<string, Record<string, unknown>> };
+  assert.match(String(deep.agent["vra-agent"].prompt), /JSON Schema/);
+  assert.ok(String(deep.agent["vra-agent"].prompt).includes('"type":"object"'));
+  assert.deepEqual(deep.permission, { "*": "deny", vra_read_run_file: "allow", vra_write_stage: "allow" });
+  assert.deepEqual(deep.mcp.vra, { type: "local", command: ["node", "run.ts"], environment: { V: "1" }, timeout: 600000 });
+  assert.throws(() => openCodeRunConfig("S", { controlledMcp: { serverName: "a.b=c", command: "x", args: [], env: {}, allowedTools: [] } }),
+    (e: unknown) => e instanceof LocalAgentError && e.code === "agent_bad_mcp");
+});
+
+test("OpenCode 参数:--pure --format json --agent,argv 不带用户正文", () => {
+  const args = opencodeArgs();
+  assert.deepEqual(args, ["run", "--pure", "--format", "json", "--agent", "vra-agent"]);
+  assert.equal(args.join(" ").includes("USER_SECRET"), false);
+  assert.throws(() => opencodeArgs({ controlledMcp: { serverName: "a.b", command: "x", args: [], env: {}, allowedTools: [] } }),
+    (e: unknown) => e instanceof LocalAgentError && e.code === "agent_bad_mcp");
+});
+
+test("OpenCode 事件白名单:text 累计为回答,tool_use 只放行产品 MCP,未知事件与非 stop 收尾不能当成功", () => {
+  const mcp = { serverName: "vra", command: "node", args: [], env: {}, allowedTools: ["mcp__vra__read_run_file"] };
+  const ok = new OpenCodeEventStream(mcp);
+  for (const line of [
+    '{"type":"step_start","part":{"type":"step-start"}}',
+    "not json diagnostics",
+    '{"type":"tool_use","part":{"type":"tool","tool":"vra_read_run_file","state":{"status":"completed","output":"x"}}}',
+    '{"type":"text","part":{"type":"text","text":"过程 "}}',
+    '{"type":"text","part":{"type":"text","text":"\\"最终回答\\""}}',
+    '{"type":"step_finish","part":{"reason":"stop","tokens":{"input":1}}}',
+  ]) assert.equal(ok.push(line), null, line);
+  assert.equal(ok.result(), "过程 \n\"最终回答\"");
+  assert.equal(ok.diagnostics(), "");
+
+  for (const toolLine of [
+    '{"type":"tool_use","part":{"type":"tool","tool":"bash"}}',
+    '{"type":"tool_use","part":{"type":"tool","tool":"vra_write_stage"}}',
+    '{"type":"tool_use","part":{"type":"tool","tool":"","state":{}}}',
+  ]) assert.ok(new OpenCodeEventStream(mcp).push(toolLine), toolLine);
+  assert.ok(new OpenCodeEventStream().push('{"type":"tool_use","part":{"type":"tool","tool":"vra_read_run_file"}}'),
+    "没有挂受控 MCP 的普通对话出现任何工具调用都算越界");
+  assert.ok(new OpenCodeEventStream(mcp).push('{"type":"weird_event"}'), "白名单之外的未知事件类型要拦");
+  assert.equal(new OpenCodeEventStream(mcp).push('{"type":"step_finish","part":{"reason":"tool-calls"}}'), null,
+    "中间 step 收尾是正常的,不视为失败");
+  assert.throws(() => new OpenCodeEventStream(mcp).result(), (e: unknown) => e instanceof LocalAgentError && e.code === "agent_failed");
+  const errored = new OpenCodeEventStream(mcp);
+  assert.equal(errored.push('{"type":"error","error":{"message":"usage limit reached"}}'), null,
+    "条目级 error 不终止适配器:会话退出码与 result() 判定");
+  assert.match(errored.diagnostics(), /usage limit/);
+  const capped = new OpenCodeEventStream({ ...mcp, maxTurns: 1 });
+  let violation: string | null = null;
+  for (let i = 0; i < 40 && !violation; i += 1) {
+    violation = capped.push('{"type":"tool_use","part":{"type":"tool","tool":"vra_read_run_file"}}');
+  }
+  assert.match(violation ?? "", /超过 32 次/);
+});
+
+function fakeOpenCode(dir = fs.mkdtempSync(path.join(os.tmpdir(), "vra-fake-opencode-"))): { dir: string; bin: string } {
+  const script = [
+    "const a=process.argv.slice(2);",
+    "if(a.includes('--version')){console.log(process.env.FAKE_OC_VERSION||'1.19.0');process.exit(0)}",
+    "if(a[0]==='run'&&a.includes('--help')){",
+    "  console.log(process.env.FAKE_OLD_HELP==='1'?'--format choices':'run enc prompt --format [json] --agent NAME --pure');process.exit(0)}",
+    "if(a[0]==='auth'){",
+    "  if(process.env.FAKE_AUTH_GONE==='1')process.exit(1)",
+    "  const mode=process.env.FAKE_AUTH_MODE||'stored';",
+    "  if(mode==='none')console.log('\\x1b[90mNo authenticated integrations\\x1b[39m')",
+    "  else if(mode==='env')console.log('Anthropic  sk-ant-***PROBE  environment')",
+    "  else if(mode==='mixed'){console.log('Anthropic  sk-ant-***PROBE  environment');console.log('OpenCode  api-key-***HIDDEN  stored')}",
+    "  else if(mode==='stored')console.log('OpenCode  api-key-***HIDDEN  stored')",
+    "  process.exit(0)",
+    "}",
+    "if(a[0]!=='run')process.exit(2)",
+    "let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>input+=x);process.stdin.on('end',()=>{",
+    "  const ev=(o)=>console.log(JSON.stringify(o));",
+    "  const scene=process.env.FAKE_EXEC||'ack';",
+    "  if(scene==='quota'){ev({type:'error',error:{message:'You have hit your usage limit. please wait.'}});process.exit(1)}",
+    "  if(scene==='shell'){ev({type:'tool_use',part:{type:'tool',tool:'bash',state:{status:'running'}}});setInterval(()=>{},1000);return}",
+    "  if(scene==='nostop'){ev({type:'text',part:{type:'text',text:'半截'}});ev({type:'step_finish',part:{reason:'tool-calls'}});return}",
+    "  const files=[];for(let i=0;i<a.length;i++)if(a[i]==='--file')files.push(a[i+1]);",
+    "  const cfg=process.env.OPENCODE_CONFIG_CONTENT?JSON.parse(process.env.OPENCODE_CONFIG_CONTENT):null;",
+    "  const text=JSON.stringify({input,noConfig:!cfg,promptInArgv:a.join(' ').includes('USER_SECRET_PROMPT'),",
+    "    pure:a.includes('--pure'),agent:a[a.indexOf('--agent')+1],",
+    "    prompt:cfg?String((cfg.agent['vra-agent'].prompt||'')).slice(0,140):null,",
+    "    permission:cfg?cfg.permission:null,mcp:cfg?Object.keys(cfg.mcp||{}):[],",
+    "    filesInfo:files.map(f=>require('fs').statSync(f).size)});",
+    "  ev({type:'text',part:{type:'text',text}});",
+    "  ev({type:'step_finish',part:{reason:'stop'}});",
+    "});",
+  ].join("\n");
+  const bin = fakeNodeExecutable(dir, "opencode", script);
+  return { dir, bin };
+}
+
+test("OpenCode 探针:只认 stored 登录,旧版与旧帮助不点亮,输出不外泄凭据", async () => {
+  const f = fakeOpenCode();
+  try {
+    const env = { ...PLATFORM_ENV, OPENCODE_BIN: f.bin, PATH: "" };
+    const ready = await probeOpenCode(env);
+    assert.equal(ready.status, "ready");
+    assert.equal(ready.version, "1.19.0");
+    assert.ok(!JSON.stringify(ready).includes("HIDDEN") && !JSON.stringify(ready).includes("PROBE"));
+    assert.equal((await probeOpenCode({ ...env, FAKE_AUTH_MODE: "none" })).status, "not_authenticated");
+    const envOnly = await probeOpenCode({ ...env, FAKE_AUTH_MODE: "env" });
+    assert.equal(envOnly.status, "not_authenticated");
+    assert.match(envOnly.detail, /auth login/);
+    assert.ok(!envOnly.detail.includes("sk-ant"), "登录提示不得回传 CLI 原文");
+    assert.equal((await probeOpenCode({ ...env, FAKE_AUTH_MODE: "mixed" })).status, "ready");
+    const old = await probeOpenCode({ ...env, FAKE_OC_VERSION: "1.18.0" });
+    assert.equal(old.status, "probe_failed");
+    assert.equal(old.version, "1.18.0");
+    assert.match(old.detail, /1\.19\.0/);
+    assert.equal((await probeOpenCode({ ...env, FAKE_OLD_HELP: "1" })).status, "probe_failed", "缺少能力参数的旧版本不能点亮");
+    assert.equal((await probeOpenCode({ ...env, FAKE_AUTH_MODE: "garbage" })).status, "probe_failed", "读不懂的登录表不算未登录");
+    assert.equal((await probeOpenCode({ ...env, FAKE_AUTH_GONE: "1" })).status, "probe_failed");
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), "vra-oc-missing-"));
+    try {
+      assert.equal((await probeOpenCode({ PATH: "", HOME: empty, USERPROFILE: empty, APPDATA: empty, LOCALAPPDATA: empty })).status,
+        "not_installed");
+    } finally { fs.rmSync(empty, { recursive: true, force: true }); }
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("OpenCode 订阅调用走内联配置:系统提示与 permission 进 OPENCODE_CONFIG_CONTENT,正文与图片走 stdin/--file,外壳旧的 OpenCode 配置不透传", async () => {
+  const f = fakeOpenCode();
+  try {
+    const png = Buffer.from("89504e470d0a1a0a", "hex").toString("base64");
+    const out = await runLocalAgent("opencode", {
+      systemPrompt: "SYSTEM-PROMPT-MARK", userPrompt: "USER_SECRET_PROMPT",
+      env: { ...PLATFORM_ENV, OPENCODE_BIN: f.bin, PATH: process.env.PATH,
+        OPENCODE_CONFIG: '{"external":true}', OPENCODE_PERMISSION: '{"external":true}', XDG_DATA_HOME: f.dir },
+      userImages: [{ name: "截图.png", data: png, mimeType: "image/png" }],
+    });
+    const report = JSON.parse(out) as { input: string; noConfig: boolean; promptInArgv: boolean; pure: boolean; agent: string;
+      prompt: string | null; permission: Record<string, string> | null; mcp: string[]; filesInfo: number[] };
+    assert.match(report.input, /^USER_SECRET_PROMPT/);
+    assert.match(report.input, /附图 1：source_file="截图\.png"/);
+    assert.equal(report.noConfig, false);
+    assert.equal(report.pure, true);
+    assert.equal(report.agent, "vra-agent");
+    assert.equal(report.promptInArgv, false);
+    assert.ok(String(report.prompt).startsWith("SYSTEM-PROMPT-MARK"));
+    assert.deepEqual(report.permission, { "*": "deny" }, "无 MCP 的普通对话 permission 全 deny");
+    assert.deepEqual(report.mcp, []);
+    assert.deepEqual(report.filesInfo, [8], "图片按 --file 附件传入");
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("OpenCode Deep 只挂产品受控 MCP,schema 写进内联提示词,执行前探针不过关不启动研究", async () => {
+  const f = fakeOpenCode();
+  try {
+    const env = { ...PLATFORM_ENV, OPENCODE_BIN: f.bin, PATH: process.env.PATH };
+    const out = await runLocalAgent("opencode", {
+      systemPrompt: "S", userPrompt: "读取运行文件", env,
+      outputSchema: { type: "object", properties: { a: { type: "string" } } },
+      controlledMcp: { serverName: "vra", command: process.execPath, args: ["/app/run_tools_mcp.ts"],
+        env: { VRA_RUN_DIR: "/data/runs/r1" }, allowedTools: ["mcp__vra__read_run_file", "mcp__vra__write_stage"], maxTurns: 8 },
+    });
+    const report = JSON.parse(out) as { permission: Record<string, string>; mcp: string[]; prompt: string | null };
+    assert.deepEqual(report.permission, { "*": "deny", vra_read_run_file: "allow", vra_write_stage: "allow" });
+    assert.deepEqual(report.mcp, ["vra"]);
+    assert.ok(String(report.prompt).includes("JSON Schema"), "opencode 没有结构化输出参数:Schema 进系统提示词,产物由产品校验把关");
+    for (const extra of [{ FAKE_AUTH_MODE: "env" }, { FAKE_AUTH_GONE: "1" }, { FAKE_OC_VERSION: "1.18.0" }, { FAKE_OLD_HELP: "1" }]) {
+      await assert.rejects(runLocalAgent("opencode", { systemPrompt: "S", userPrompt: "U", env: { ...env, ...extra } }),
+        (e: unknown) => e instanceof LocalAgentError && ["agent_not_authenticated", "agent_probe_failed", "agent_cli_too_old"].includes(e.code), JSON.stringify(extra));
+    }
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("OpenCode 越界杀进程树报策略违规,无正常收尾不能当成功,配额耗尽按退出码归类", async () => {
+  const f = fakeOpenCode();
+  try {
+    const env = { ...PLATFORM_ENV, OPENCODE_BIN: f.bin, PATH: "" };
+    const started = Date.now();
+    await assert.rejects(runLocalAgent("opencode", { systemPrompt: "S", userPrompt: "U", env: { ...env, FAKE_EXEC: "shell" }, timeoutMs: 60_000 }),
+      (e: unknown) => e instanceof LocalAgentError && e.code === "agent_policy_violation");
+    assert.ok(Date.now() - started < 20_000, "越界后不能等到超时才收尾");
+    await assert.rejects(runLocalAgent("opencode", { systemPrompt: "S", userPrompt: "U", env: { ...env, FAKE_EXEC: "nostop" } }),
+      (e: unknown) => e instanceof LocalAgentError && e.code === "agent_failed", "没有 reason=stop 的收尾不能当成功");
+    await assert.rejects(runLocalAgent("opencode", { systemPrompt: "S", userPrompt: "U", env: { ...env, FAKE_EXEC: "quota" } }),
+      (e: unknown) => e instanceof LocalAgentError && e.code === "agent_quota");
+  } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
 });

@@ -2,10 +2,11 @@
  * 本机 Agent CLI 适配层。
  *
  * 来源与边界：参考 nexu-io/open-design 0.21.0 的 runtime registry / detection，
- * 但这里只收下本工作台当前能安全证明的最小能力：Claude Code、CodeBuddy 与 Codex CLI 的订阅登录。
- * 三家都用用户自己在本机完成的登录；产品不代管登录、不复制登录凭据。
+ * 但这里只收下本工作台当前能安全证明的最小能力：Claude Code、CodeBuddy、Codex CLI 与 OpenCode CLI 的订阅登录。
+ * 各家都用用户自己在本机完成的登录；产品不代管登录、不复制登录凭据。
  * 普通 Agent 对话与 Deep 研究使用各自的产品 MCP；连接探针等内部任务不挂载工具。
- * 所有路径都关闭会话落盘与用户配置；没有等价隔离参数的 CLI 不能把按钮点亮。
+ * 所有路径都关闭用户配置；没有等价隔离参数的 CLI 不能把按钮点亮
+ * （OpenCode 目前没有禁用会话落盘的开关：会话留在用户自己的 OpenCode 数据目录，设置页要如实说明）。
  */
 import { execFile, spawn, spawnSync, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -23,11 +24,11 @@ type ParentSignal = "SIGINT" | "SIGTERM" | "SIGHUP";
 const parentSignalHandlers = new Map<ParentSignal, () => void>();
 let parentExitHookInstalled = false;
 
-export type LocalAgentId = "claude" | "codebuddy" | "codex";
+export type LocalAgentId = "claude" | "codebuddy" | "codex" | "opencode";
 
 export interface LocalAgentStatus {
-  provider: "cli-codex" | "cli-claude" | "cli-codebuddy";
-  name: "Codex" | "Claude Code" | "WorkBuddy / CodeBuddy";
+  provider: "cli-codex" | "cli-claude" | "cli-codebuddy" | "cli-opencode";
+  name: "Codex" | "Claude Code" | "WorkBuddy / CodeBuddy" | "OpenCode";
   installed: boolean;
   authenticated: boolean;
   available: boolean;
@@ -217,7 +218,7 @@ function usableExecutable(candidate: string, platform: NodeJS.Platform): string 
  * 顺序:环境变量 *_BIN(设了就只认它)→ 设置页手动指定的位置 → PATH 与常见目录 → 官方原生安装 → WorkBuddy 桌面版内置。
  */
 export function executableCandidates(bin: string, env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string[] {
-  const overrideKey = bin === "claude" ? "CLAUDE_BIN" : bin === "codebuddy" ? "CODEBUDDY_BIN" : bin === "codex" ? "CODEX_BIN" : "";
+  const overrideKey = bin === "claude" ? "CLAUDE_BIN" : bin === "codebuddy" ? "CODEBUDDY_BIN" : bin === "codex" ? "CODEX_BIN" : bin === "opencode" ? "OPENCODE_BIN" : "";
   const override = overrideKey ? String(env[overrideKey] ?? "").trim() : "";
   const extensions = platform === "win32"
     ? [...new Set([".exe", ".ps1", ".cmd", ".bat", "", ...String(env.PATHEXT ?? "").split(";").map((x) => x.toLowerCase()).filter(Boolean)])]
@@ -638,6 +639,9 @@ export function localSubscriptionEnv(base: NodeJS.ProcessEnv, agent: LocalAgentI
   // Codex 的 ChatGPT 登录在用户自己的 CODEX_HOME（缺省 ~/.codex）。CODEX_API_KEY / OPENAI_API_KEY
   // 不在白名单里：exec 模式认 CODEX_API_KEY，漏进来就会静默改成按 API 计费。
   if (agent === "codex") keys.push("CODEX_HOME");
+  // OpenCode 的登录（auth.json / credentials）与会话数据都在通用列表已有的 XDG_DATA_HOME 下的
+  // opencode/ 目录；执行时产品的隔离配置只经 OPENCODE_CONFIG_CONTENT 注入（runLocalAgent 里现做现传），
+  // 外壳里遗留的 OPENCODE_CONFIG 等一律不透传。
   const allowed = new Set(keys);
   return Object.fromEntries(Object.entries(base).filter(([key, value]) => value !== undefined &&
     allowed.has(process.platform === "win32" ? key.toUpperCase() : key)));
@@ -973,6 +977,269 @@ export async function probeCodex(env: NodeJS.ProcessEnv = process.env): Promise<
   }
 }
 
+/** 「1.19.0」→ 三段数字；读不出返回 null。OpenCode 与 Codex 同款语义版本。 */
+export function parseOpenCodeVersion(output: string): string | null {
+  return parseCodexVersion(output);
+}
+
+/**
+ * OpenCode 的 bash/edit/网络等内建工具在 1.19.0 已并入 permission 体系（v1.1.1 起），
+ * 环境变量 `OPENCODE_CONFIG_CONTENT` 可整份内联注入。实测 1.19.0：`{"*":"deny"}` 后内建工具
+ * 一个都执行不了，`<namespace>_<tool>` 形式的 allow 能精确放行产品 MCP 工具。
+ * 这是第一道门；真正的兜底是下面的 OpenCodeEventStream —— 白名单外的 tool_use 就杀进程树。
+ */
+export const MIN_OPENCODE_CLI_VERSION = "1.19.0";
+const OPENCODE_PROBE_TIMEOUT_MS = 15_000;
+/** 只读探针要确认的能力参数:JSON 事件流、内联 agent、禁外挂插件。 */
+const REQUIRED_OPENCODE_FLAGS = ["--format", "--agent", "--pure"] as const;
+
+export function openCodeVersionSupported(version: string | null): boolean {
+  if (!version) return false;
+  const have = version.split(".").map(Number);
+  const need = MIN_OPENCODE_CLI_VERSION.split(".").map(Number);
+  for (let i = 0; i < 3; i += 1) if (have[i] !== need[i]) return (have[i] ?? 0) > (need[i] ?? 0);
+  return true;
+}
+
+/** `opencode auth ls` 正文的一行:integration + 来源 + 类型(stored / environment)。 */
+export function parseOpenCodeAuthList(stdout: string): { stored: number; environment: number } | null {
+  const text = String(stdout ?? "")
+    // CLI 用 ANSI 上色;先按行拆再去色,行尾的类型词不被颜色码截断
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    .replace(/\u001b\[[0-9;]*m/g, "");
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.some((line) => line.startsWith("No authenticated integrations"))) return { stored: 0, environment: 0 };
+  let stored = 0;
+  let environment = 0;
+  let sawRow = false;
+  for (const line of lines) {
+    // 行尾是类型列;对不上的行(标题 / 分隔)不参与统计
+    if (/\bstored\b/.test(line)) { stored += 1; sawRow = true; }
+    else if (/\benvironment\b/.test(line)) { environment += 1; sawRow = true; }
+  }
+  if (!sawRow) return null;
+  return { stored, environment };
+}
+
+function openCodeSubscriptionEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = localSubscriptionEnv(base, "opencode");
+  // 外壳里遗留的这几项会与产品内联注入的隔离配置混在一起:产品不透传,注入的说了算。
+  for (const key of ["OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_PERMISSION"]) delete env[key];
+  env.OPENCODE_DISABLE_AUTOUPDATE = "1";
+  env.OPENCODE_DISABLE_LSP_DOWNLOAD = "1";
+  return env;
+}
+
+async function openCodeVersion(bin: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<string | null> {
+  const call = executableInvocation(bin, ["--version"], env);
+  const v = await execFileAsync(call.file, call.args, { env, timeout: OPENCODE_PROBE_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 64 * 1024, signal });
+  return parseOpenCodeVersion(String(v.stdout));
+}
+
+async function openCodeCapabilities(bin: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<boolean> {
+  const call = executableInvocation(bin, ["run", "--help"], env);
+  const h = await execFileAsync(call.file, call.args, { env, timeout: OPENCODE_PROBE_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 128 * 1024, signal });
+  const help = String(h.stdout);
+  return REQUIRED_OPENCODE_FLAGS.every((flag) => help.includes(flag));
+}
+
+/**
+ * 登录状态:`opencode auth ls` 返回。
+ * - 明确的 "No authenticated integrations" = 未登录;
+ * - 至少一条 stored credential = 用户真实登录过(含 OpenAI / Anthropic 的订阅 OAuth 与各家的 API key 凭据,
+ *   OpenCode 不公开区分 —— 这张卡片承诺的是「用你在 OpenCode 里已配置好的模型」,如实说);
+ * - 只有 environment 连接算不上登录:那是外壳环境变量,不是用户的登录态。
+ * 读不懂一律抛错,交给调用方当「检测未完成」;stdout 不回传(行里可能带打码的凭据名)。
+ */
+async function openCodeLogin(bin: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<{ stored: number; environment: number }> {
+  const call = executableInvocation(bin, ["auth", "ls"], env);
+  let stdout = "";
+  try {
+    const s = await execFileAsync(call.file, call.args, { env, timeout: OPENCODE_PROBE_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 128 * 1024, signal });
+    stdout = String(s.stdout);
+  } catch (error) {
+    const failure = error as { code?: unknown; killed?: boolean; signal?: unknown };
+    if (failure.code === 1 && !failure.killed && !failure.signal) {
+      // 没有任何凭据时 `model.default` 就绪检查失败也是退出码 1,输出里没有行 —— 同样按未登录
+      const parsed = parseOpenCodeAuthList((error as { stdout?: unknown }).stdout as string ?? "");
+      if (parsed) return parsed;
+    }
+    throw new LocalAgentError("agent_probe_failed", "OpenCode 登录状态检测未完成，请重试；现有登录不会被清除。");
+  }
+  const parsed = parseOpenCodeAuthList(stdout);
+  if (!parsed) throw new LocalAgentError("agent_probe_failed", "OpenCode 登录状态检测未完成，请重试；现有登录不会被清除。");
+  return parsed;
+}
+
+/** 只公开版本与「是否在 OpenCode 里配置过模型」，不返回连接明细。 */
+export async function probeOpenCode(env: NodeJS.ProcessEnv = process.env): Promise<LocalAgentStatus> {
+  const base = { provider: "cli-opencode", name: "OpenCode" } as const;
+  const bin = findExecutable("opencode", env);
+  if (!bin) {
+    return { ...base, installed: false, authenticated: false, available: false, version: null,
+      status: "not_installed", detail: "本机未检测到 OpenCode CLI；安装后在终端运行 opencode auth login 配置模型" };
+  }
+  const runEnv = openCodeSubscriptionEnv(env);
+  let version: string | null = null;
+  try {
+    version = await openCodeVersion(bin, runEnv);
+  } catch {
+    return { ...base, installed: true, authenticated: false, available: false, version: null,
+      status: "probe_failed", detail: "OpenCode 已安装，但版本检测失败" };
+  }
+  if (!openCodeVersionSupported(version)) {
+    return { ...base, installed: true, authenticated: false, available: false, version,
+      status: "probe_failed", detail: `OpenCode CLI 版本过旧，需要 ${MIN_OPENCODE_CLI_VERSION} 或更新` };
+  }
+  try {
+    if (!(await openCodeCapabilities(bin, runEnv))) {
+      return { ...base, installed: true, authenticated: false, available: false, version,
+        status: "probe_failed", detail: "OpenCode 版本过旧，缺少受限对话所需的安全参数" };
+    }
+    const login = await openCodeLogin(bin, runEnv);
+    if (login.stored > 0) {
+      return { ...base, installed: true, authenticated: true, available: true, version,
+        status: "ready", detail: "已安装并配置过模型，可使用本机 OpenCode" };
+    }
+    return { ...base, installed: true, authenticated: false, available: false, version,
+      status: "not_authenticated",
+      detail: "已安装；在 OpenCode data 目录之外只看到环境变量连接，算不上登录，请在终端运行 opencode auth login 配置模型" };
+  } catch (error) {
+    return { ...base, installed: true, authenticated: false, available: false, version,
+      status: "probe_failed", detail: error instanceof LocalAgentError ? error.message : "OpenCode 登录状态检测失败" };
+  }
+}
+
+/**
+ * 受控运行配置(产品注入的 `OPENCODE_CONFIG_CONTENT`),可单测。
+ * 锁定:内建工具全 denypermission;`--pure` 排除外挂插件;不自动更新、不拉 LSP;分享保持 manual。
+ * 系统提示词经内联 primary agent 传入(OpenCode 没有 --system-prompt 参数)。
+ */
+export function openCodeRunConfig(systemPrompt: string, options: {
+  controlledMcp?: RunLocalAgentOptions["controlledMcp"];
+  outputSchema?: unknown;
+} = {}): Record<string, unknown> {
+  const mcp = options.controlledMcp;
+  if (mcp && !MCP_SERVER_NAME_RE.test(mcp.serverName)) throw new LocalAgentError("agent_bad_mcp", "受控工具服务名不合法");
+  const structured = options.outputSchema === undefined ? "" :
+    "\n\n最终回答必须是符合下面 JSON Schema 的 JSON:\n" + JSON.stringify(options.outputSchema);
+  const config: Record<string, unknown> = {
+    agent: {
+      "vra-agent": {
+        description: "Vibe Research controlled agent",
+        mode: "primary",
+        prompt: systemPrompt + structured,
+        permission: { "*": "deny", ...(mcp ? permissionAllows(mcp) : {}) },
+      },
+    },
+    permission: { "*": "deny", ...(mcp ? permissionAllows(mcp) : {}) },
+    autoupdate: false,
+  };
+  if (mcp) {
+    config.mcp = {
+      [mcp.serverName]: {
+        type: "local",
+        command: [mcp.command, ...mcp.args],
+        environment: mcp.env,
+        timeout: 600_000,
+      },
+    };
+  }
+  return config;
+}
+
+/** OpenCode 的 MCP 工具 permission action = `<namespace(server)>_<tool>`(tool/mcp.ts 的 name())。 */
+export function openCodeMcpAction(serverName: string, allowedTool: string): string {
+  const prefix = `mcp__${serverName}__`;
+  const tool = allowedTool.startsWith(prefix) ? allowedTool.slice(prefix.length) : allowedTool;
+  return `${serverName.replace(/[^a-zA-Z0-9_-]/g, "_")}_${tool.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+}
+
+function permissionAllows(controlledMcp: NonNullable<RunLocalAgentOptions["controlledMcp"]>): Record<string, string> {
+  return Object.fromEntries(controlledMcp.allowedTools.map((tool) => [openCodeMcpAction(controlledMcp.serverName, tool), "allow"]));
+}
+
+/** 可单测的参数生成器:正文只走 stdin,argv 不带用户内容;事件流 json、禁外挂插件、指定内联 agent。 */
+export function opencodeArgs(options: { controlledMcp?: RunLocalAgentOptions["controlledMcp"] } = {}): string[] {
+  if (options.controlledMcp && !MCP_SERVER_NAME_RE.test(options.controlledMcp.serverName)) {
+    throw new LocalAgentError("agent_bad_mcp", "受控工具服务名不合法");
+  }
+  return ["run", "--pure", "--format", "json", "--agent", "vra-agent"];
+}
+
+/**
+ * `opencode run` 的 JSONL 事件允许出现的条目类型。内建 bash / 编辑文件 / 联网 / 提问都是
+ * tool_use 的具体工具名,不在白名单就等于没做过;permission 配置是第一道门,这里是兜底。
+ */
+const OPENCODE_ALLOWED_TYPES = new Set(["text", "reasoning", "step_start", "step_finish", "todo", "error"]);
+
+export interface OpenCodeEventStreamOptions { controlledMcp?: RunLocalAgentOptions["controlledMcp"] }
+
+/**
+ * 逐行消费 `opencode run --format json`。perf:工具输出在 tool_use 事件里原样回显,长阶段可达数 MB,
+ * 与 Codex 一样逐行处理不攒全量。`push` 返回非空字符串表示越出白名单,调用方必须立即终止进程树。
+ */
+export class OpenCodeEventStream {
+  readonly #tools: Set<string> | null;
+  readonly #maxToolCalls: number;
+  #callCount = 0;
+  readonly #texts: string[] = [];
+  #stopped = false;
+  #failure: string | null = null;
+  readonly #errors: string[] = [];
+
+  constructor(controlledMcp?: OpenCodeEventStreamOptions["controlledMcp"]) {
+    this.#tools = controlledMcp
+      ? new Set(controlledMcp.allowedTools.map((name) => openCodeMcpAction(controlledMcp.serverName, name)))
+      : null;
+    this.#maxToolCalls = Math.max(32, (controlledMcp?.maxTurns ?? 32) * 8);
+  }
+
+  push(line: string): string | null {
+    const text = line.trim();
+    if (!text) return null;
+    let event: { type?: unknown; error?: unknown; part?: { type?: unknown; tool?: unknown; text?: unknown; state?: unknown } };
+    try { event = JSON.parse(text) as typeof event; } catch { return null; }
+    const type = typeof event.type === "string" ? event.type : "";
+    switch (type) {
+      case "text":
+        if (typeof event.part?.text === "string") this.#texts.push(event.part.text);
+        return null;
+      case "step_finish":
+        if ((event.part as { reason?: unknown } | undefined)?.reason === "stop") this.#stopped = true;
+        return null;
+      case "error":
+        this.#failure ??= (textOf(event.error) ?? textOf(event.part) ?? "error").slice(0, 2_000);
+        return null;
+      case "tool_use": return this.#tool(event);
+      default: return OPENCODE_ALLOWED_TYPES.has(type) ? null : `OpenCode 尝试了产品未开放的事件（${type.slice(0, 40) || "未知"}），已终止`;
+    }
+  }
+
+  #tool(event: { part?: { tool?: unknown; state?: unknown } }): string | null {
+    const part = event.part;
+    const tool = typeof part?.tool === "string" ? part.tool : "";
+    if (tool && this.#tools?.has(tool)) {
+      this.#callCount += 1;
+      if (this.#callCount > this.#maxToolCalls) return `OpenCode 本轮工具调用超过 ${this.#maxToolCalls} 次，已终止`;
+      return null;
+    }
+    return `OpenCode 调用了未授权的工具（${(tool || "未知").slice(0, 60)}），已终止`;
+  }
+
+  /** 失败分类只看 error 事件的文本;permission 拒绝已由 CLI 转成普通工具失败,不在这里。 */
+  diagnostics(): string {
+    return [this.#failure, ...this.#errors].filter(Boolean).join("\n");
+  }
+
+  result(): string {
+    if (this.#failure || !this.#stopped) throw new LocalAgentError("agent_failed", "OpenCode 本轮没有正常结束");
+    const message = this.#texts.filter((x) => x.trim()).join("\n").trim();
+    if (!message) throw new LocalAgentError("agent_empty_output", "OpenCode 没有返回可见回答");
+    return message;
+  }
+}
+
 /**
  * Codex 自带的工具开关。0.160.0 实测：关掉这些之后模型只剩产品 MCP、一个因 code-mode host
  * 关闭而必然失败的 exec 入口，以及 exec 模式下不可用的提问工具。这只是第一道门；
@@ -1131,8 +1398,8 @@ export interface RunLocalAgentOptions {
   systemPrompt: string;
   userPrompt: string;
   /**
-   * 资料转写的图片附件；字节已由导入边界校验。WorkBuddy 走原生上传块，Codex 由适配器写进
-   * 一次性工作区再用 --image 附上。调用方永远不传本机路径。
+   * 资料转写的图片附件；字节已由导入边界校验。WorkBuddy 走原生上传块，Codex 与 OpenCode
+   * 由适配器写进一次性工作区再分别用 --image / --file 附上。调用方永远不传本机路径。
    */
   userImages?: Array<{ name: string; data: string; mimeType: string }>;
   outputSchema?: unknown;
@@ -1162,8 +1429,8 @@ export function localAgentInput(agent: LocalAgentId, prompt: string, images?: Ru
     images.reduce((sum, im) => sum + im.data.length, 0) > 32 * 1024 * 1024) {
     throw new LocalAgentError("agent_bad_image", "图片附件格式或大小不受支持");
   }
-  if (agent === "codex") {
-    // 图片按顺序随 --image 附在提示词后面；这里只补上与之对应的原文件名，供证据引用。
+  if (agent === "codex" || agent === "opencode") {
+    // 图片按顺序写进一次性工作区随 --image / --file 附上；这里只补上与之对应的原文件名，供证据引用。
     return `${prompt}\n\n${images.map((im, i) => `附图 ${i + 1}：source_file=${JSON.stringify(im.name)}`).join("\n")}`;
   }
   return JSON.stringify({ type: "user", message: { role: "user", content: [
@@ -1277,8 +1544,8 @@ export function parseCodeBuddyOutput(stdout: string): string {
   throw new LocalAgentError("agent_empty_output", "CodeBuddy 没有返回可见回答");
 }
 
-const AGENT_LABEL: Record<LocalAgentId, string> = { claude: "Claude Code", codebuddy: "CodeBuddy", codex: "Codex" };
-const AGENT_LOGIN_COMMAND: Record<LocalAgentId, string> = { claude: "claude", codebuddy: "codebuddy", codex: "codex login" };
+const AGENT_LABEL: Record<LocalAgentId, string> = { claude: "Claude Code", codebuddy: "CodeBuddy", codex: "Codex", opencode: "OpenCode" };
+const AGENT_LOGIN_COMMAND: Record<LocalAgentId, string> = { claude: "claude", codebuddy: "codebuddy", codex: "codex login", opencode: "opencode auth login" };
 
 function failureMessage(agent: LocalAgentId, stdout: string, stderr: string, code: number | null): LocalAgentError {
   const label = AGENT_LABEL[agent];
@@ -1376,6 +1643,26 @@ export async function runLocalAgent(agent: LocalAgentId, opts: RunLocalAgentOpti
       throw new LocalAgentError("agent_probe_failed", "Codex 版本或登录状态检测失败");
     }
   }
+  if (agent === "opencode") {
+    // 每次执行前都确认 OpenCode 里仍有配置好的模型：用户若在两次调用之间清掉了凭据，
+    // 同一张卡片会静默变成不可用。版本过旧时隔离配置不存在，也不能放行。
+    try {
+      const openEnv = openCodeSubscriptionEnv(baseEnv);
+      if (!openCodeVersionSupported(await openCodeVersion(bin, openEnv, opts.signal))) {
+        throw new LocalAgentError("agent_cli_too_old", `OpenCode CLI 版本过旧，需要 ${MIN_OPENCODE_CLI_VERSION} 或更新`);
+      }
+      if (!(await openCodeCapabilities(bin, openEnv, opts.signal))) {
+        throw new LocalAgentError("agent_cli_too_old", "OpenCode 版本过旧，缺少受限对话所需的安全参数");
+      }
+      const login = await openCodeLogin(bin, openEnv, opts.signal);
+      if (login.stored < 1) throw new LocalAgentError("agent_not_authenticated", "OpenCode 里没有配置好的模型；请先在终端运行 opencode auth login");
+    } catch (error) {
+      releaseSlot();
+      if (opts.signal?.aborted) throw cancelled();
+      if (error instanceof LocalAgentError) throw error;
+      throw new LocalAgentError("agent_probe_failed", "OpenCode 版本或登录状态检测失败");
+    }
+  }
   // 探针期间已被取消（CodeBuddy 的探针不接取消信号，会等它自己结束）：不再创建研究进程。
   if (opts.signal?.aborted) {
     releaseSlot();
@@ -1384,7 +1671,7 @@ export async function runLocalAgent(agent: LocalAgentId, opts: RunLocalAgentOpti
 
   const maxOut = 4 * 1024 * 1024;
   const maxErr = 64 * 1024;
-  // Codex 的 JSONL 会原样回显每次工具结果；逐行消费、不攒全量，只给单行设上限。
+  // Codex / OpenCode 的 JSONL 会原样回显每次工具结果；逐行消费、不攒全量，只给单行设上限。
   const maxCodexLine = 32 * 1024 * 1024;
   let tmpDir: string;
   let outputSchemaFile: string | undefined;
@@ -1395,9 +1682,9 @@ export async function runLocalAgent(agent: LocalAgentId, opts: RunLocalAgentOpti
     activeLocalAgents = Math.max(0, activeLocalAgents - 1);
     throw error;
   }
-  if (agent === "codex") {
+  if (agent === "codex" || agent === "opencode") {
     try {
-      if (opts.outputSchema !== undefined) {
+      if (agent === "codex" && opts.outputSchema !== undefined) {
         outputSchemaFile = path.join(tmpDir, "output-schema.json");
         fs.writeFileSync(outputSchemaFile, JSON.stringify(opts.outputSchema), { mode: 0o600 });
       }
@@ -1420,6 +1707,15 @@ export async function runLocalAgent(agent: LocalAgentId, opts: RunLocalAgentOpti
       ? subscriptionEnv(baseEnv)
       : agent === "codex"
       ? codexSubscriptionEnv(baseEnv)
+      : agent === "opencode"
+      ? (() => {
+          const env = openCodeSubscriptionEnv(baseEnv);
+          // 受控配置只经这一个环境变量进入:产品不给 OpenCode 写任何文件。
+          env.OPENCODE_CONFIG_CONTENT = JSON.stringify(openCodeRunConfig(opts.systemPrompt, {
+            controlledMcp: opts.controlledMcp, outputSchema: opts.outputSchema,
+          }));
+          return env;
+        })()
       : codeBuddySubscriptionEnv(baseEnv, {
         account: codeBuddyRuntime!.legacyEphemeralHome ? codeBuddyRuntime!.account : null,
         ephemeralHome: codeBuddyRuntime!.legacyEphemeralHome ? tmpDir : undefined,
@@ -1437,8 +1733,11 @@ export async function runLocalAgent(agent: LocalAgentId, opts: RunLocalAgentOpti
       ? claudeArgs(opts.systemPrompt, opts.outputSchema, opts.controlledMcp)
       : agent === "codex"
       ? codexArgs(opts.systemPrompt, tmpDir, { controlledMcp: opts.controlledMcp, outputSchemaFile, imageFiles })
+      : agent === "opencode"
+      ? opencodeArgs({ controlledMcp: opts.controlledMcp })
       : codeBuddyArgs(opts.systemPrompt, opts.outputSchema, codeBuddyRuntime!.legacyEphemeralHome, opts.controlledMcp);
     if (agent === "codebuddy" && opts.userImages?.length) args.push("--input-format", "stream-json");
+    for (const file of imageFiles) if (agent === "opencode") args.push("--file", file);
     const launch = executableInvocation(bin, args, runEnv);
     child = spawn(launch.file, launch.args, {
       cwd: tmpDir,
@@ -1528,14 +1827,16 @@ export async function runLocalAgent(agent: LocalAgentId, opts: RunLocalAgentOpti
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     const codexStream = agent === "codex" ? new CodexEventStream(opts.controlledMcp) : null;
+    const openCodeStream = agent === "opencode" ? new OpenCodeEventStream(opts.controlledMcp) : null;
     let pendingLine = "";
     child.stdout.on("data", (chunk: string) => {
       if (terminationError) return;
-      if (codexStream) {
+      if (codexStream || openCodeStream) {
+        const stream = codexStream ?? openCodeStream!;
         const lines = (pendingLine + chunk).split("\n");
         pendingLine = lines.pop() ?? "";
         for (const line of lines) {
-          const violation = codexStream.push(line);
+          const violation = stream.push(line);
           if (violation) return terminate(new LocalAgentError("agent_policy_violation", violation));
         }
         if (pendingLine.length > maxCodexLine) terminate(new LocalAgentError("agent_output_too_large", `${label} 输出超出上限，已终止`));
@@ -1565,14 +1866,15 @@ export async function runLocalAgent(agent: LocalAgentId, opts: RunLocalAgentOpti
       clearTimeout(timer);
       settleOwnedProcessGroup(child.pid).then(() => {
         if (terminationError) return finish(() => reject(terminationError!));
-        const lastViolation = codexStream && pendingLine ? codexStream.push(pendingLine) : null;
+        const finalStream = codexStream ?? openCodeStream;
+        const lastViolation = finalStream && pendingLine ? finalStream.push(pendingLine) : null;
         if (lastViolation) return finish(() => reject(new LocalAgentError("agent_policy_violation", lastViolation)));
-        // Codex 的 stdout 是整段工具往来；分类只看它的终止原因，免得把研究正文里的 “401” 误判成掉登录。
-        const diagnostics = codexStream ? codexStream.diagnostics() : stdout;
+        // Codex / OpenCode 的 stdout 是整段工具往来；分类只看它的终止原因，免得把研究正文里的 “401” 误判成掉登录。
+        const diagnostics = finalStream ? finalStream.diagnostics() : stdout;
         if (code !== 0) return finish(() => reject(failureMessage(agent, diagnostics, stderr, code)));
         finish(() => {
         try {
-          resolve(agent === "claude" ? parseClaudeOutput(stdout) : codexStream ? codexStream.result() : parseCodeBuddyOutput(stdout));
+          resolve(agent === "claude" ? parseClaudeOutput(stdout) : finalStream ? finalStream.result() : parseCodeBuddyOutput(stdout));
         } catch (error) {
           // CodeBuddy 2.143.1 在未登录时会以 exit 0 输出一行纯文本，而不是 JSON。
           // 只有解析已经失败时才把已知的登录 / 限流诊断升级为受控错误，避免误读正常模型回答。

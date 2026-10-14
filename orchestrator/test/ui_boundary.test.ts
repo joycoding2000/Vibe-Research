@@ -309,7 +309,7 @@ test("v2 界面不再有产品专用的 Codex 登录与旧 Responses 引擎文�
   const quick = fs.readFileSync(path.join(FINANCE, "components", "ui", "QuickAiConnect.tsx"), "utf8");
   assert.match(quick, /codex login/, "Codex 没登录时要告诉用户去终端运行 codex login");
   const settingsSrc = fs.readFileSync(path.join(FINANCE, "pages", "Settings.tsx"), "utf8");
-  assert.match(settingsSrc, /\["cli-codex", "cli-claude", "cli-codebuddy"\]\.includes\(selectedProvider\)/,
-    "Codex 是本机订阅 Agent 之一，接入后的说明要与另外两家一致");
+  assert.match(settingsSrc, /\["cli-codex", "cli-claude", "cli-codebuddy", "cli-opencode"\]\.includes\(selectedProvider\)/,
+    "Codex 是本机订阅 Agent 之一，接入后的说明要与另外几家一致");
   assert.match(settingsSrc, /npm install -g @openai\/codex/);
 });

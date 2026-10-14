@@ -6,7 +6,7 @@
  *        → 确保 `.gitignore` 含 `.local/` → 打印下一步。
  * 已存在的用户配置一律不改(幂等);`--force` 才改,且先备份为 config.json.bak-<时间>。
  * 用法:node orchestrator/src/init.ts [--python P] [--provider <id>] [--force] [--json]
- *   --provider:cli-claude / cli-codex / cli-codebuddy(本机订阅 Agent)或 providers/ 里的模板 id(模型 API)
+ *   --provider:cli-claude / cli-codex / cli-codebuddy / cli-opencode(本机订阅 Agent)或 providers/ 里的模板 id(模型 API)
  */
 import fs from "node:fs";
 import path from "node:path";

@@ -2,8 +2,8 @@
  * **AI 来源(「大脑」)解析** —— 用户在界面上选的那一份按请求带进来;没带就用后台默认。
  *
  * 只有两类大脑:
- *  - **本机订阅 Agent**(`cli-claude` / `cli-codex` / `cli-codebuddy`):用户自己在本机登录好的
- *    Claude Code / Codex CLI / WorkBuddy(CodeBuddy),产品只通过受控工具调用它,免 API key;
+ *  - **本机订阅 Agent**(`cli-claude` / `cli-codex` / `cli-codebuddy` / `cli-opencode`):用户自己在本机登录好的
+ *    Claude Code / Codex CLI / WorkBuddy(CodeBuddy) / OpenCode,产品只通过受控工具调用它,免 API key;
  *  - **模型 API**:任意 OpenAI 兼容的 Chat Completions 端点(产品模板或自填地址),要 key。
  *
  * 🔴 与「密钥只从环境变量读」并不冲突:这里收到的 key **一个字节都不落盘**,
@@ -80,6 +80,7 @@ const LOCAL_AGENT_BY_PROVIDER = Object.freeze({
   "cli-claude": "claude",
   "cli-codex": "codex",
   "cli-codebuddy": "codebuddy",
+  "cli-opencode": "opencode",
 } as const satisfies Record<string, LocalAgentId>);
 
 /** 只在本机 / 内网用的名字(RFC 6761 / 6762 / 8375 与 ICANN 保留的 .internal 等):远程模式下页面不能填 */
@@ -118,7 +119,7 @@ export function resolveRuntimeProvider(
     if (Object.hasOwn(LOCAL_AGENT_BY_PROVIDER, id)) {
       return { runtime: "local-agent", agent: LOCAL_AGENT_BY_PROVIDER[id as keyof typeof LOCAL_AGENT_BY_PROVIDER], env: baseEnv };
     }
-    throw new RuntimeProviderError("unsupported_cli", `订阅档当前只支持 Claude Code、Codex 与 WorkBuddy / CodeBuddy，接不上 ${id}`);
+    throw new RuntimeProviderError("unsupported_cli", `订阅档当前只支持 Claude Code、Codex、WorkBuddy / CodeBuddy 与 OpenCode，接不上 ${id}`);
   }
 
   const key = String(llm.apiKey ?? "").trim();

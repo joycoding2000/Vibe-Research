@@ -45,16 +45,18 @@
 | `cli-claude` | `local_agent` | 本机 `claude -p` | 使用者自己的 claude.ai 订阅登录(API key / Bedrock / Vertex 登录不算订阅;探测与每次调用前都会核对) |
 | `cli-codex` | `local_agent` | 本机 `codex exec` | 使用者自己的 ChatGPT 登录(`codex login`);Codex 里配的 API key 登录不认(每次调用前核对) |
 | `cli-codebuddy` | `local_agent` | 本机 `codebuddy -p`(独立 CLI 或 WorkBuddy 桌面版内置) | 使用者自己的 WorkBuddy / CodeBuddy 登录 |
+| `cli-opencode` | `local_agent` | 本机 `opencode run --format json` | 使用者在 OpenCode 里配置好的模型凭据(`opencode auth login`);需 ≥ `1.19.0`。OpenCode 支持任意模型网关,模型由用户自己的配置决定;目前没有禁用会话落盘的开关,会话留在用户自己的 OpenCode 数据目录 |
 | `providers/` 里的模板 id(如 `deepseek`) | `direct` | Chat Completions + function calling | key 只从模板声明的环境变量读(如 `DEEPSEEK_API_KEY`),不进配置文件 |
 | 不传且没有后台默认 + `--no-agent` | `none` | 干跑:只跑取数、编排与校验 | — |
 
 - **不回落**:选中的大脑前置条件不满足(没装、没登录、缺 key)一律报错,绝不悄悄换成另一个大脑。
 - **本机 Agent 的隔离**:每个阶段 attempt 起一次独立 CLI 会话,只挂一个产品 MCP 服务器(`src/finance/run_tools_mcp.ts`),工具白名单 = 5 个受控工具;
-  CLI 内建工具全关(Claude / CodeBuddy:`--tools ""` + `--strict-mcp-config`;Codex:`-s read-only` + `--ignore-user-config` + 关闭 shell / 联网搜索 / 子代理等功能,
-  事件流出现白名单外的条目类型就立即终止进程树)。子进程环境变量走白名单(`localSubscriptionEnv`):只带系统基础变量与各 CLI 的登录目录
-  (`CLAUDE_CONFIG_DIR` / `CLAUDE_CODE_OAUTH_TOKEN` / `CODEX_HOME`),**不带任何 API key**(`CODEX_API_KEY` / `OPENAI_API_KEY` 等被排除,
+  CLI 内建工具全关(Claude / CodeBuddy:`--tools ""` + `--strict-mcp-config`;Codex:`-s read-only` + `--ignore-user-config` + 关闭 shell / 联网搜索 / 子代理等功能;
+  OpenCode:经 `OPENCODE_CONFIG_CONTENT` 内联注入 `permission: {"*":"deny"}` + 内联 agent 承载系统提示词,只 allow 产品的 MCP 工具 + `--pure` 排除外挂插件),
+  事件流出现白名单外的条目类型就立即终止进程树。子进程环境变量走白名单(`localSubscriptionEnv`):只带系统基础变量与各 CLI 的登录目录
+  (`CLAUDE_CONFIG_DIR` / `CLAUDE_CODE_OAUTH_TOKEN` / `CODEX_HOME` / `XDG_DATA_HOME`),**不带任何 API key**(`CODEX_API_KEY` / `OPENAI_API_KEY` 等被排除,
   否则账单可能悄悄从订阅换成 key)。产品不读、不复制、不软链任何 CLI 的认证文件。
-- **找 CLI 的顺序**:环境变量 `CLAUDE_BIN` / `CODEX_BIN` / `CODEBUDDY_BIN`(设了就只认它)→ 页面「接入 AI」里保存的 WorkBuddy 位置
+- **找 CLI 的顺序**:环境变量 `CLAUDE_BIN` / `CODEX_BIN` / `CODEBUDDY_BIN` / `OPENCODE_BIN`(设了就只认它)→ 页面「接入 AI」里保存的 WorkBuddy 位置
   (`<数据根>/local-agents.json`)→ PATH 与常见目录 → 官方原生安装位置 → WorkBuddy 桌面版内置。研究子进程与页面认同一个位置。
 - **模型 API**:`engines/direct_stage_agent.ts` 在产品进程里跑工具循环;端点地址、默认模型、结构化输出方式来自模板(用户覆盖 `<数据根>/providers/<id>.json`)。
   只有模板 `direct` 段记录过真实 key 实测结果的才算「已实测」,结构化输出方式按实测结论(`server_schema` 或 `prompt`);
@@ -101,7 +103,7 @@
 ```bash
 cd orchestrator && npm install      # 一次
 cd .. && node orchestrator/src/run.ts --symbol 300308 --market SZ --provider cli-claude
-# --provider:cli-claude / cli-codex / cli-codebuddy,或 providers/ 模板 id(先 export 模板声明的 key 环境变量);不传则用后台默认
+# --provider:cli-claude / cli-codex / cli-codebuddy / cli-opencode,或 providers/ 模板 id(先 export 模板声明的 key 环境变量);不传则用后台默认
 # 可选:--run-id X(字母数字 . _ -)  --overwrite(清空同名运行目录)  --model M(只对模型 API)  --python /path/python
 #      --max-retries 2  --gate-retries 2  --turn-timeout-min 30  --stages profile,financials  --no-agent(干跑)
 #      --endpoints full|core(full = 注册表 datasources/registry.json 里所有启用且市场匹配的端点,默认;core = 仅 Phase 0 的 8 个 legacy 脚本)

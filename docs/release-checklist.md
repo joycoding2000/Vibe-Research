@@ -15,9 +15,9 @@ v1.2.0(2026-09-09)起暂撤 Mac 客户端，撤回范围见 [源码交付说明]
    在候选提交上运行跨平台 CI，分清 Windows 选定契约测试与实机完整验收。
 4. 运行 `scripts/doctor --net`，披露数据源限流、缺授权与失败。发布前完成一次不带夹具的完整六阶段研究；
    core / full 范围、模型来源、平台与跳过项逐一记录，历史安装版成功不能替代源码实跑。
-5. 模型接入覆盖正常、未登录、额度耗尽和不可用状态，不静默换来源。三家订阅 CLI 分别实跑
-   (Claude Code 只认 claude.ai 订阅登录、Codex 只认 ChatGPT 登录、WorkBuddy / CodeBuddy)。未实跑的 provider 模板
-   不标成已验证；完整供应商矩阵与 Windows Job Object 回收保证仍需各自的证据。
+5. 模型接入覆盖正常、未登录、额度耗尽和不可用状态，不静默换来源。各家订阅 CLI 分别实跑
+   (Claude Code 只认 claude.ai 订阅登录、Codex 只认 ChatGPT 登录、WorkBuddy / CodeBuddy、OpenCode 需 ≥ 1.19.0 且要确认数据范围说明)。
+   未实跑的 provider 模板不标成已验证；完整供应商矩阵与 Windows Job Object 回收保证仍需各自的证据。
 6. 独立审查(Opus 5)先审一次 → 核实问题 → 修复 → 只复验受影响范围，无可操作回归后才提交、推送。
 7. 对候选文件和 Git 历史分别扫描凭据；核实每项命中。`.local/`、旧客户端数据、研究材料、
    浏览器存储、API key、登录态和本地回退备份不进入发布。不复制、不软链任何 CLI 的认证文件(含 `~/.codex/auth.json`)。

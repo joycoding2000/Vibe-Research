@@ -35,7 +35,10 @@ export const NA = "—";
 /** 哪家 Agent：订阅档用设置页里的名字；API 档用模型名；都没有就如实说没记录 */
 export function engineName(e: RunMetrics["engine"]): string {
   const p = e.provider ?? "";
-  if (p.startsWith("cli-")) return AI_MODELS.find((m) => m.provider === p)?.name ?? p;
+  if (p.startsWith("cli-")) {
+    if (p === "cli-opencode") return "OpenCode";
+    return AI_MODELS.find((m) => m.provider === p)?.name ?? p;
+  }
   if (e.model) return AI_MODELS.find((m) => m.id === e.model)?.name ?? e.model;
   return p || "没记录是哪家";
 }

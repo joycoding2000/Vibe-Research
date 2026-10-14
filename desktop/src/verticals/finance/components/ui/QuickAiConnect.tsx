@@ -9,6 +9,7 @@ const OPTIONS = [
   { provider: "cli-codex", label: "Codex订阅版", detail: "使用本机 Codex CLI 的 ChatGPT 登录" },
   { provider: "cli-claude", label: "Claude订阅", detail: "使用本机 Claude Code 登录" },
   { provider: "cli-codebuddy", label: "WorkBuddy CLI", detail: "使用本机 WorkBuddy / CodeBuddy 登录" },
+  { provider: "cli-opencode", label: "OpenCode", detail: "使用你在本机 OpenCode 已配置好的模型" },
 ];
 
 /** 登录发生在用户自己的 CLI 里:这里只说去哪儿登录,不代办 */
@@ -16,6 +17,7 @@ const LOGIN_HINT: Record<string, string> = {
   "cli-codex": "本机的 Codex CLI 还没有用 ChatGPT 账号登录。请在终端运行 codex login，完成后再点一次。",
   "cli-claude": "本机的 Claude Code 还没有登录。请在终端运行 claude 完成登录，然后再点一次。",
   "cli-codebuddy": "没有可用的 WorkBuddy / CodeBuddy 登录。请打开 WorkBuddy 完成登录（独立 CLI 用户运行 codebuddy 登录），然后再点一次。",
+  "cli-opencode": "本机的 OpenCode 里还没有配置好的模型。请在终端运行 opencode auth login 配置模型，完成后再点一次。",
 };
 
 export function QuickAiConnect({ onDismiss, storageStatus }: { onDismiss: () => void; storageStatus: string }) {

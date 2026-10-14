@@ -36,7 +36,7 @@ import { DEFAULT_CONSISTENCY, readSnapshot, snapshotKey, snapshotUsable, writeSn
 import { currentPlugin } from "./plugin.ts";
 import { ReportLibraryError, addReport, listReports as listStoredReports, removeReport, reportCitationErrors, reportCitations, reportContextAsync, reportFile, reportRecallPlan, reportText, type ReportRecord } from "./report_library.ts";
 import { GuidedToolError, guidedToolTurn as guidedToolTurnCore, type GuidedToolReply } from "./guided_tool.ts";
-import { LocalAgentError, localSubscriptionEnv, probeClaude, probeCodeBuddy, probeCodex, saveCodeBuddyLocation, type LocalAgentStatus } from "./local_agent_runtime.ts";
+import { LocalAgentError, localSubscriptionEnv, probeClaude, probeCodeBuddy, probeCodex, probeOpenCode, saveCodeBuddyLocation, type LocalAgentStatus } from "./local_agent_runtime.ts";
 import { redact } from "./service_redact.ts";
 import { CredentialError, authEnvValue, savedCredential } from "./saved_credentials.ts";
 import { runMetrics, type RunMetrics } from "./run_compare.ts";
@@ -185,7 +185,7 @@ export function researchRuntimeEnv(ctx: Pick<ServiceContext, "repoRoot" | "dataR
       for (const [k, v] of Object.entries(localSubscriptionEnv(baseEnv, runtime.agent))) if (v !== undefined) out[k] = v;
       // 部署者用环境变量指定的 CLI 位置也要带过去,否则对话能用、研究却报「未安装」(#50)。
       // 设置页保存的位置在数据根里,子进程启动时自己读(loadSavedAgentPaths)。
-      const binKey = ({ claude: "CLAUDE_BIN", codebuddy: "CODEBUDDY_BIN", codex: "CODEX_BIN" } as const)[runtime.agent];
+      const binKey = ({ claude: "CLAUDE_BIN", codebuddy: "CODEBUDDY_BIN", codex: "CODEX_BIN", opencode: "OPENCODE_BIN" } as const)[runtime.agent];
       if (String(baseEnv[binKey] ?? "").trim()) out[binKey] = String(baseEnv[binKey]);
     } else {
       const { envKey } = runtime.api;
@@ -1152,7 +1152,7 @@ export function displayUrl(raw: string | null): string | null {
 }
 
 const LOCAL_AGENT_LABEL: Record<string, string> = {
-  "cli-claude": "Claude Code 订阅", "cli-codex": "Codex 订阅", "cli-codebuddy": "WorkBuddy / CodeBuddy 订阅",
+  "cli-claude": "Claude Code 订阅", "cli-codex": "Codex 订阅", "cli-codebuddy": "WorkBuddy / CodeBuddy 订阅", "cli-opencode": "OpenCode 订阅",
 };
 
 /**
@@ -1170,7 +1170,7 @@ export function productInfo(ctx: ServiceContext): Record<string, unknown> {
   let configError: string | null = null;
   if (id && id.startsWith("cli-")) {
     provider = { ...provider, profile: id, kind: "local_agent", label: LOCAL_AGENT_LABEL[id] ?? id };
-    if (!Object.hasOwn(LOCAL_AGENT_LABEL, id)) configError = `后台默认 AI 来源 ${id} 不是支持的本机订阅 Agent(cli-claude / cli-codex / cli-codebuddy)`;
+    if (!Object.hasOwn(LOCAL_AGENT_LABEL, id)) configError = `后台默认 AI 来源 ${id} 不是支持的本机订阅 Agent(cli-claude / cli-codex / cli-codebuddy / cli-opencode)`;
   } else if (id) {
     provider = { ...provider, profile: id, kind: "api" };
     try {
@@ -1207,14 +1207,15 @@ export function productInfo(ctx: ServiceContext): Record<string, unknown> {
 
 /** 设置页的真实本机运行时状态。只返回可公开的版本与布尔状态，不返回路径、账号或组织。 */
 export async function localAgents(ctx: ServiceContext, env: NodeJS.ProcessEnv = process.env, provider?: string): Promise<LocalAgentStatus[]> {
-  if (provider !== undefined && !['cli-codex', 'cli-claude', 'cli-codebuddy'].includes(provider)) {
+  if (provider !== undefined && !['cli-codex', 'cli-claude', 'cli-codebuddy', 'cli-opencode'].includes(provider)) {
     throw new ServiceError('bad_provider', '不支持的本机 AI 来源');
   }
   // A selected source must not wait for or inspect unrelated subscriptions.
   if (provider === 'cli-claude') return [await probeClaude(env)];
   if (provider === 'cli-codebuddy') return [await probeCodeBuddy(env)];
   if (provider === 'cli-codex') return [await probeCodex(env)];
-  return await Promise.all([probeCodex(env), probeClaude(env), probeCodeBuddy(env)]);
+  if (provider === 'cli-opencode') return [await probeOpenCode(env)];
+  return await Promise.all([probeCodex(env), probeClaude(env), probeCodeBuddy(env), probeOpenCode(env)]);
 }
 
 /** 设置页手动指定 / 清除 WorkBuddy 的位置(#50:装在自动检测找不到的盘或文件夹)。返回重新检测后的状态。 */

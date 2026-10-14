@@ -15,7 +15,7 @@ import { validateWith } from "./schemas.ts";
 export interface ProductConfig {
   python: string | null;
   /**
-   * 后台默认 AI 来源:`cli-claude` / `cli-codex` / `cli-codebuddy`(本机订阅 Agent),
+   * 后台默认 AI 来源:`cli-claude` / `cli-codex` / `cli-codebuddy` / `cli-opencode`(本机订阅 Agent),
    * 或 providers/<id>.json 的模板 id(模型 API)。null = 没有默认,页面必须自己选。
    */
   provider: { profile: string | null };
@@ -159,5 +159,5 @@ export function loadProductConfig(repoRoot: string, opts: {
 
 function assertProfileId(v: string, label: string): string {
   if (/^[a-z][a-z0-9_-]{0,31}$/.test(v)) return v;
-  throw new Error(`${label} 不是合法的 AI 来源 id:${JSON.stringify(v)}(本机订阅用 cli-claude / cli-codex / cli-codebuddy,模型 API 用 providers/ 里的模板 id)`);
+  throw new Error(`${label} 不是合法的 AI 来源 id:${JSON.stringify(v)}(本机订阅用 cli-claude / cli-codex / cli-codebuddy / cli-opencode,模型 API 用 providers/ 里的模板 id)`);
 }
