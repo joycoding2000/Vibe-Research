@@ -1231,7 +1231,7 @@ export class OpenCodeEventStream {
         if ((event.part as { reason?: unknown } | undefined)?.reason === "stop") this.#stopped = true;
         return null;
       case "error":
-        this.#failure ??= (textOf(event.error) ?? textOf(event.part) ?? "error").slice(0, 2_000);
+        this.#failure ??= (textOf(event.error) ?? textOfDeep(event.error) ?? textOf(event.part) ?? "error").slice(0, 2_000);
         return null;
       case "tool_use": return this.#tool(event);
       default: return OPENCODE_ALLOWED_TYPES.has(type) ? null : `OpenCode 尝试了产品未开放的事件（${type.slice(0, 40) || "未知"}），已终止`;
@@ -1344,6 +1344,20 @@ const textOf = (value: unknown): string | null => {
   if (value && typeof value === "object" && typeof (value as { message?: unknown }).message === "string") {
     return (value as { message: string }).message;
   }
+  return null;
+};
+
+/** OpenCode 的 error 事件形如 `{name:"APIError", data:{message,statusCode}}`:message 在 data 里一层 —— 补这一跳。 */
+const textOfDeep = (value: unknown): string | null => {
+  if (!value || typeof value !== "object") return null;
+  const data = (value as { data?: unknown }).data;
+  const wrapped = (search: unknown): string | null => textOf(search);
+  const message = textOf(data);
+  if (message) {
+    const status = (data as { statusCode?: unknown } | undefined)?.statusCode;
+    return typeof status === "number" ? `${message} (HTTP ${status})` : message;
+  }
+  void wrapped;
   return null;
 };
 
