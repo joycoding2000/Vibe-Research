@@ -1239,14 +1239,20 @@ test("OpenCode 版本解析与最低版本闸:低于实测版本不能点亮", (
   assert.equal(MIN_OPENCODE_CLI_VERSION, "1.19.0");
 });
 
-test("OpenCode 登录表解析:去 ANSI 后数 stored / environment,读不懂返回 null 由调用方当检测未完成", () => {
-  assert.deepEqual(parseOpenCodeAuthList("No authenticated integrations"), { stored: 0, environment: 0 });
-  assert.deepEqual(parseOpenCodeAuthList("\x1b[90mT\x1b[39m  Credentials\n\x1b[34m\u2022\x1b[39m  OpenCode Go \x1b[90mapi\x1b[39m\n|\n\u2014  1 credentials\nOpenCode Go  api-key-***  stored\n"),
+test("OpenCode 登录表解析:1.19.0 输出是 Credentials / Environment 两段的计数行,读不懂返回 null 由调用方当检测未完成", () => {
+  assert.deepEqual(parseOpenCodeAuthList("No authenticated integrations"), { stored: 0, environment: 0 },
+    "更高版本的无凭据整表文案也认");
+  // 1.19.0 实测:有凭据 → 标题 + 凭据行 + `— 1 credentials`;计数行带装饰前缀
+  assert.deepEqual(parseOpenCodeAuthList("\x1b[90mT\x1b[39m  Credentials \x1b[90m~\\.local\\share\\opencode\\auth.json\n\x1b[90m|\x1b[39m\n\x1b[34m\u2022\x1b[39m  OpenCode Go \x1b[90mapi\n\x1b[90m|\x1b[39m\n\x1b[90m\u2014\x1b[39m  1 credentials\n\n"),
     { stored: 1, environment: 0 });
-  assert.deepEqual(parseOpenCodeAuthList("Anthropic sk-ant-*** environment\nOpenCode api-*** stored\n"), { stored: 1, environment: 1 });
-  assert.deepEqual(parseOpenCodeAuthList("Anthropic X sk-ant-*** environment\n"), { stored: 0, environment: 1 }, "只有环境变量连接不算登录");
+  // 1.19.0 实测:环境变量连接是独立的 Environment 段,两段总是一起输出;计数 `<N> environment variable(s)`
+  assert.deepEqual(parseOpenCodeAuthList("T Credentials auth.json\n|\n\u2014  2 credentials\n\nT Environment\n|\n\u2022 Anthropic ANTHROPIC_API_KEY\n|\n\u2014  1 environment variable\n"),
+    { stored: 2, environment: 1 });
+  assert.deepEqual(parseOpenCodeAuthList("T Credentials auth.json\n|\n\u2014  0 credentials\n\nT Environment\n|\n\u2014  1 environment variable\n"),
+    { stored: 0, environment: 1 }, "只有环境变量连接不算登录");
+  assert.deepEqual(parseOpenCodeAuthList("\u2014  0 credentials"), { stored: 0, environment: 0 });
   assert.equal(parseOpenCodeAuthList(""), null);
-  assert.equal(parseOpenCodeAuthList("标题 行 没有 类型 列"), null);
+  assert.equal(parseOpenCodeAuthList("标题 行 没有 计数列"), null);
 });
 
 test("OpenCode MCP 工具 permission action 名与服务的白名单转换一致", () => {
@@ -1329,14 +1335,18 @@ function fakeOpenCode(dir = fs.mkdtempSync(path.join(os.tmpdir(), "vra-fake-open
     "const a=process.argv.slice(2);",
     "if(a.includes('--version')){console.log(process.env.FAKE_OC_VERSION||'1.19.0');process.exit(0)}",
     "if(a[0]==='run'&&a.includes('--help')){",
-    "  console.log(process.env.FAKE_OLD_HELP==='1'?'--format choices':'run enc prompt --format [json] --agent NAME --pure');process.exit(0)}",
+    // 实测 1.19.0:run --help 输出到 stderr
+    "  const f=(o)=>process.stderr.write(o);",
+    "  f(process.env.FAKE_OLD_HELP==='1'?'--format choices':'run enc prompt --format [json] --agent NAME --pure');process.exit(0)}",
     "if(a[0]==='auth'){",
     "  if(process.env.FAKE_AUTH_GONE==='1')process.exit(1)",
+    "  const dim=(s)=>'\\x1b[90m'+s+'\\x1b[39m';",
     "  const mode=process.env.FAKE_AUTH_MODE||'stored';",
-    "  if(mode==='none')console.log('\\x1b[90mNo authenticated integrations\\x1b[39m')",
-    "  else if(mode==='env')console.log('Anthropic  sk-ant-***PROBE  environment')",
-    "  else if(mode==='mixed'){console.log('Anthropic  sk-ant-***PROBE  environment');console.log('OpenCode  api-key-***HIDDEN  stored')}",
-    "  else if(mode==='stored')console.log('OpenCode  api-key-***HIDDEN  stored')",
+    // 1.19.0 实测输出:凭据段计数 `<N> credentials`;环境变量连接是独立的 Environment 段
+    "  if(mode==='none')console.log('T Credentials auth.json', dim('|'), dim('\\u2014'), '0 credentials')",
+    "  else if(mode==='env'){console.log('T Credentials auth.json', dim('|'), dim('\\u2014'), '0 credentials');console.log('T Environment', dim('|'), dim('\\u2022'), 'Anthropic ANTHROPIC_API_KEY', dim('|'), dim('\\u2014'), '1 environment variable')}",
+    "  else if(mode==='mixed'){console.log('T Credentials auth.json', dim('|'), dim('\\u2022'), 'OpenCode api', dim('|'), dim('\\u2014'), '1 credentials');console.log('T Environment', dim('|'), dim('\\u2014'), '1 environment variable')}",
+    "  else if(mode==='stored')console.log('T Credentials auth.json', dim('|'), dim('\\u2022'), 'OpenCode api', dim('|'), dim('\\u2014'), '1 credentials')",
     "  process.exit(0)",
     "}",
     "if(a[0]!=='run')process.exit(2)",

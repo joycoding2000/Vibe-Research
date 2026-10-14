@@ -479,22 +479,32 @@ export async function saveCodeBuddyLocation(dataRoot: string, input: string | nu
   return probe(env);
 }
 
-/** Mirrors npm read-cmd-shim's $basedir target lookup, restricted to Node shims.
+/**
+ * Windows 的 npm PowerShell shim 有两种形态,都要穿过它拿到**真正**要运行的入口(安全判据:目标唯一且确实存在):
+ *  1. Node shim:`& node$exe "$basedir/xxx.cjs" $args` —— 返回 JS 入口,由当前 Node 运行(避开 5.1 的原生抽引号重写);
+ *  2. 原生 exe shim(opencode-ai 的 bin 是包内 `bin/opencode.exe`,npm 也生成 ps1 wrapper):
+ *     `& "$basedir/…/xxx.exe" $args` —— 返回该 exe。
  * The chosen installed CLI is trusted executable code, not a sandbox boundary.
- * Bypass PowerShell 5.1's native-argument rewriting (empty args / JSON quotes).
  */
-function npmNodeEntry(bin: string): string | null {
+function npmShimEntry(bin: string, platform: NodeJS.Platform = process.platform): string | null {
   try {
+    const p = platform === "win32" ? path.win32 : path.posix;
     const stat = fs.statSync(bin);
     if (!stat.isFile() || stat.size > 64 * 1024) return null;
     const source = fs.readFileSync(bin, "utf8").replace(/\r\n/g, "\n");
     if (!source.startsWith("#!/usr/bin/env pwsh\n") ||
       !source.includes("$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n")) return null;
-    const targets = [...source.matchAll(/&\s+"(?:\$basedir\/)?node\$exe"\s+"\$basedir\/([^"\r\n]+)"\s+\$args\b/g)].map((m) => m[1]!);
-    if (!targets.length || new Set(targets).size !== 1 || /[$`]/.test(targets[0]!) || !/\.[cm]?js$/i.test(targets[0]!)) return null;
-    const entry = path.resolve(path.dirname(bin), targets[0]!);
-    if (!fs.statSync(entry).isFile()) return null;
-    return entry;
+    // node shim 的目标在第二个引号段;exe shim 的目标($basedir/…exe)与 $args 同处一个引号段
+    const target = (() => {
+      const node = [...source.matchAll(/(?:\$input\s*\|\s*)?&\s+"(?:\$basedir\/)?node\$exe"\s+"\$basedir\/([^"\r\n]+)"\s+\$args\b/g)].map((m) => m[1]!);
+      const exe = [...source.matchAll(/(?:\$input\s*\|\s*)?&\s+"\$basedir\/([^"\r\n]+\.exe)"\s+\$args\b/gi)].map((m) => m[1]!);
+      const all = [...node, ...exe];
+      return all.length === 1 ? all[0]! : null;
+    })();
+    if (!target || /[$`]/.test(target)) return null;
+    // 目标不存在时不放行;resolve 出的路径再查一次真实文件(stateSync 是边界)
+    const entry = p.resolve(p.dirname(bin), target);
+    return fs.statSync(entry).isFile() ? entry : null;
   } catch { return null; }
 }
 
@@ -512,9 +522,11 @@ export function executableInvocation(
     if ([".cmd", ".bat"].includes(ext)) throw new LocalAgentError("agent_start_failed", "Windows CLI 缺少安全的 PowerShell 启动器");
     return { file: bin, args };
   }
-  const entry = npmNodeEntry(bin);
+  const entry = npmShimEntry(bin);
   if (!entry) throw new LocalAgentError("agent_windows_wrapper_unsupported", "Windows 仅支持原生 CLI 或标准 npm Node 启动器，请重新安装官方 CLI");
-  return { file: process.execPath, args: [entry, ...args] };
+  // shim 的目标有两种:包自带的 .exe 直接运行;JS 入口(FakeNode 吉 / read-cmd-shim 系列)交给当前 Node,
+  // 避开 PowerShell 5.1 的原生抽引号重写。
+  return entry.toLowerCase().endsWith(".exe") ? { file: entry, args } : { file: process.execPath, args: [entry, ...args] };
 }
 
 function oneLine(value: unknown): string | null {
@@ -1001,24 +1013,32 @@ export function openCodeVersionSupported(version: string | null): boolean {
   return true;
 }
 
-/** `opencode auth ls` 正文的一行:integration + 来源 + 类型(stored / environment)。 */
+/**
+ * `opencode auth ls` 的登录表。输出随版本有三种已核实的形态(去 ANSI 后按行判定):
+ *  - 1.19.0 存储凭据段:标题 `Credentials <auth.json 路径>` + 若干凭据行 + 计数行 `<N> credentials`;
+ *    0 credentials = 用户在这个 OpenCode 里没配置过任何凭据;
+ *  - 1.19.0 环境变量连接段:标题 `Environment` + `• <服务商> <变量名>` 行 + `<N> environment variable(s)` ——
+ *    那是外壳环境变量,不是用户的登录态,不计入登录;
+ *  - 更高版本(dev 分支实测行为):无任何连接时整表输出 `No authenticated integrations`。
+ * 读不懂返回 null,交给调用方当「检测未完成」。
+ */
 export function parseOpenCodeAuthList(stdout: string): { stored: number; environment: number } | null {
   const text = String(stdout ?? "")
-    // CLI 用 ANSI 上色;先按行拆再去色,行尾的类型词不被颜色码截断
     .replace(/\x1b\[[0-9;]*m/g, "")
     .replace(/\u001b\[[0-9;]*m/g, "");
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   if (lines.some((line) => line.startsWith("No authenticated integrations"))) return { stored: 0, environment: 0 };
-  let stored = 0;
-  let environment = 0;
-  let sawRow = false;
+  let stored: number | null = null;
+  let environment: number | null = null;
   for (const line of lines) {
-    // 行尾是类型列;对不上的行(标题 / 分隔)不参与统计
-    if (/\bstored\b/.test(line)) { stored += 1; sawRow = true; }
-    else if (/\benvironment\b/.test(line)) { environment += 1; sawRow = true; }
+    // 计数行可能带装饰前缀(1.19.0: `— 1 credentials`),只锚行尾
+    const creds = /(\d+) credentials$/i.exec(line);
+    if (creds) stored = Number(creds[1]!);
+    const envVars = /(\d+) environment variables?$/i.exec(line);
+    if (envVars) environment = Number(envVars[1]!);
   }
-  if (!sawRow) return null;
-  return { stored, environment };
+  if (stored === null) return null;
+  return { stored, environment: environment ?? 0 };
 }
 
 function openCodeSubscriptionEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -1039,7 +1059,8 @@ async function openCodeVersion(bin: string, env: NodeJS.ProcessEnv, signal?: Abo
 async function openCodeCapabilities(bin: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<boolean> {
   const call = executableInvocation(bin, ["run", "--help"], env);
   const h = await execFileAsync(call.file, call.args, { env, timeout: OPENCODE_PROBE_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 128 * 1024, signal });
-  const help = String(h.stdout);
+  // 实测 1.19.0:yargs 把 run --help 写到 stderr(stdout 为空);与 Codex 登录状态同款双流合并
+  const help = `${String(h.stdout)}\n${String(h.stderr)}`;
   return REQUIRED_OPENCODE_FLAGS.every((flag) => help.includes(flag));
 }
 
