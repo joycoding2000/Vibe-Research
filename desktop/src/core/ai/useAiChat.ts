@@ -25,6 +25,20 @@ export interface AiMsg {
 
 export type AiSend = (args: { message: string; session: string; signal: AbortSignal }) => Promise<string>;
 
+/** 一轮进行中的后端进度（只读计数，不含对话正文）。 */
+export interface AiTurnProgress {
+  active: boolean;
+  elapsed_ms: number;
+  tool_calls: number;
+  running_tool: string | null;
+  last_tool: string | null;
+}
+/** 查询"这一轮模型干到哪了"。查不到（失败 / 取消）不该影响对话本身，降级为只有秒表。 */
+export type AiProgressPoll = (session: string, signal: AbortSignal) => Promise<AiTurnProgress | null>;
+
+/** 进度轮询间隔：2 秒。后端查询是纯内存,开销可忽略。 */
+const PROGRESS_POLL_MS = 2_000;
+
 const readText = (k: string): string | null => {
   try {
     return localStorage.getItem(k);
@@ -197,6 +211,8 @@ export interface AiChat {
    */
   key: string;
   loading: boolean;
+  /** 进行中这一轮的后端进度（模型在调哪个工具/调了几次）；没有轮询通道或查不到时为 null */
+  progress: AiTurnProgress | null;
   err: string | null;
   info: string | null;
   /** 发一条；`decorate` 让调用方在真正发出去之前给消息加上下文（界面上仍显示原话） */
@@ -206,7 +222,7 @@ export interface AiChat {
   abort: () => void;
 }
 
-export function useAiChat(key: string, send: AiSend): AiChat {
+export function useAiChat(key: string, send: AiSend, pollProgress?: AiProgressPoll): AiChat {
   const [epoch, setEpoch] = useState(0);
   const epochRef = useRef(epoch);
   epochRef.current = epoch;
@@ -217,10 +233,21 @@ export function useAiChat(key: string, send: AiSend): AiChat {
    */
   const [chat, setChat] = useState<{ key: string; msgs: AiMsg[] }>(() => ({ key, msgs: key ? loadChat(key) : [] }));
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState<AiTurnProgress | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [storageWarning, setStorageWarning] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const pollRef = useRef(pollProgress);
+  pollRef.current = pollProgress;
+  /** 进度轮询定时器（等待期间每 2 秒查一次后端）。所有退出路径都要清掉，否则会在界面背后空跑。 */
+  const progressTimerRef = useRef<number | null>(null);
+  const stopProgressPoll = useCallback(() => {
+    if (progressTimerRef.current !== null) {
+      window.clearInterval(progressTimerRef.current);
+      progressTimerRef.current = null;
+    }
+  }, []);
   /**
    * 提交权的**同步**锁。
    * 🔴 不能只靠 `loading`：它是 state，同一事件里连点两次两个闭包看到的都是 false，
@@ -247,6 +274,8 @@ export function useAiChat(key: string, send: AiSend): AiChat {
     abortRef.current?.abort();
     abortRef.current = null;
     submittingRef.current = null;
+    stopProgressPoll();
+    setProgress(null);
     setLoading(false);
     setErr(null);
     setInfo(null);
@@ -270,13 +299,15 @@ export function useAiChat(key: string, send: AiSend): AiChat {
         : null);
   }, [key, chat]);
 
-  useEffect(() => () => abortRef.current?.abort(), []); // 卸载兜底
+  useEffect(() => () => { stopProgressPoll(); abortRef.current?.abort(); }, [stopProgressPoll]); // 卸载兜底
 
   const abort = useCallback(() => {
     const hadRequest = !!abortRef.current;
     abortRef.current?.abort();
     abortRef.current = null;
     submittingRef.current = null;    // 不放锁的话，切走再切回来会永远发不出去
+    stopProgressPoll();
+    setProgress(null);
     setLoading(false);
     if (hadRequest) {
       setMsgs((m) => completeTurns(m));
@@ -322,6 +353,23 @@ export function useAiChat(key: string, send: AiSend): AiChat {
       const startedKey = keyRef.current;
       const alive = () => abortRef.current === ac && !ac.signal.aborted;
 
+      // 等待期间每 2 秒问一次后端"干到哪了"。查不到就降级成只有秒表（不影响对话本身），
+      // 也用后半截的秒表向用户证明界面没有死。
+      stopProgressPoll();
+      setProgress(null);
+      if (pollRef.current) {
+        const turnSession = sessionRef.current;
+        progressTimerRef.current = window.setInterval(() => {
+          void (async () => {
+            if (!alive()) return;
+            try {
+              const p = await pollRef.current?.(turnSession, ac.signal);
+              if (alive()) setProgress(p && p.active ? p : null);
+            } catch { /* 进度只是参考：查询失败保持上一次的值 */ }
+          })();
+        }, PROGRESS_POLL_MS);
+      }
+
       try {
         const reply = await sendRef.current({
           message: decorate ? decorate(q) : q,
@@ -360,12 +408,14 @@ export function useAiChat(key: string, send: AiSend): AiChat {
         if (submittingRef.current === ac) submittingRef.current = null;
         if (abortRef.current === ac) {
           abortRef.current = null;
+          stopProgressPoll();
+          setProgress(null);
           setLoading(false);
         }
       }
     },
-    [loading, setMsgs],
+    [loading, setMsgs, stopProgressPoll],
   );
 
-  return { msgs: chat.msgs, key: chat.key, loading, err, info: [storageWarning, info].filter(Boolean).join(" ") || null, submit, clear, abort };
+  return { msgs: chat.msgs, key: chat.key, loading, progress, err, info: [storageWarning, info].filter(Boolean).join(" ") || null, submit, clear, abort };
 }

@@ -16,7 +16,7 @@ import { Sparkles, Trash2, X } from "lucide-react";
 import { cn } from "../lib/cn";
 import { AiComposer, AiMessages } from "./AiMessages";
 import { draftFor, useAiDraftInbox, useAiWired, useCurrentAiPage } from "./pageContext";
-import { type AiSend, useAiChat } from "./useAiChat";
+import { type AiProgressPoll, type AiSend, useAiChat } from "./useAiChat";
 
 export interface AiDockCopy {
   /** 按钮上的字 */
@@ -50,12 +50,16 @@ export interface AiDockProps {
    * 发送、保存、复制用的都是原文。垂类给规则，Core 不认识里面的词。
    */
   displayText?: (text: string) => string;
+  /** 等待期间查询本轮进度（模型正在调哪个工具）。垂类注入后端查询；不给就只显示秒表。 */
+  pollProgress?: AiProgressPoll;
+  /** 工具名的展示文案（行业相关，垂类给）；不给就显示原始工具名。 */
+  toolLabel?: (name: string) => string;
 }
 
 /** 浮动按钮和外壳右上角其它按钮之间留的空 */
 const TRIGGER_GAP = 12;
 
-export function AiDock({ send, configured, copy, renderReplyActions, renderReply, renderSetup, displayText }: AiDockProps) {
+export function AiDock({ send, configured, copy, renderReplyActions, renderReply, renderSetup, displayText, pollProgress, toolLabel }: AiDockProps) {
   const wired = useAiWired();
   const page = useCurrentAiPage();
   const [open, setOpen] = useState(false);
@@ -72,7 +76,7 @@ export function AiDock({ send, configured, copy, renderReplyActions, renderReply
     ro?.observe(el);
     return () => { ro?.disconnect(); root.style.removeProperty("--ai-trigger-space"); };
   }, []);
-  const chat = useAiChat(page?.key ?? "", send);
+  const chat = useAiChat(page?.key ?? "", send, pollProgress);
   const { abort } = chat;
   const pageKey = page?.key ?? "";
   // 输入框里的字记在哪一页名下：换了页就不再显示上一页没发出去的字
@@ -187,6 +191,8 @@ export function AiDock({ send, configured, copy, renderReplyActions, renderReply
                 <AiMessages
                   msgs={chat.msgs}
                   loading={chat.loading}
+                  progress={chat.progress}
+                  toolLabel={toolLabel}
                   err={chat.err}
                   info={chat.info}
                   renderReply={renderReply}

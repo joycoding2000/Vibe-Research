@@ -128,8 +128,11 @@ export interface ToolExecutor {
 
 const FAILURE_TEXT = "工具执行失败或参数不合法，请核对输入后重试；不得将失败当作没有数据。";
 
+/** 工具活动的两条边(start=开始执行、done=出结果)。只给对话进度用,不含参数与结果正文。 */
+export interface ToolActivityEvent { phase: "start" | "done"; name: string }
+
 export function createToolExecutor(tools: AssistantTool[], signal: AbortSignal,
-  opts: { maxResultChars?: number } = {}): ToolExecutor {
+  opts: { maxResultChars?: number; onActivity?: (event: ToolActivityEvent) => void } = {}): ToolExecutor {
   const receipts: ToolReceipt[] = [];
   const texts: string[] = [];
   const maxResultChars = opts.maxResultChars ?? MAX_TOOL_RESULT_CHARS;
@@ -165,6 +168,7 @@ export function createToolExecutor(tools: AssistantTool[], signal: AbortSignal,
         if (active) return { kind: "busy" };
         if (++calls > MAX_TOOL_CALLS_PER_TURN) return { kind: "budget" };
         active = acquired = true;
+        opts.onActivity?.({ phase: "start", name });
         parsed = args;
         const result = await tool.run(args as never, signal);
         if (signal.aborted) throw new Error("turn_finished");
@@ -184,15 +188,16 @@ export function createToolExecutor(tools: AssistantTool[], signal: AbortSignal,
       } catch (error) {
         // 参数过了校验、执行时才失败的,照样记下查的是什么(结果当作没有)
         return failed(name, start, error, citeOf(tool, parsed, undefined));
-      } finally { if (acquired) active = false; }
+      } finally { if (acquired) { active = false; opts.onActivity?.({ phase: "done", name }); } }
     },
   };
 }
 
 /** 本机订阅 Agent 用的一次性 HTTP 桥:随机令牌、只监听 127.0.0.1、拒绝带 Origin 的浏览器请求。 */
-export async function openAssistantBridge(tools: AssistantTool[], signal: AbortSignal) {
+export async function openAssistantBridge(tools: AssistantTool[], signal: AbortSignal,
+  opts: { onActivity?: (event: ToolActivityEvent) => void } = {}) {
   const token = crypto.randomBytes(32).toString("hex");
-  const executor = createToolExecutor(tools, signal);
+  const executor = createToolExecutor(tools, signal, opts);
   const server = http.createServer(async (req, res) => {
     const send = (status: number, value: unknown) => {
       res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });

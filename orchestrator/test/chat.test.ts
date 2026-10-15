@@ -9,7 +9,7 @@ import { z } from "zod";
 
 import "../src/finance/register.ts"; // 测试文件也是入口:插件要先注册
 import type { AssistantTool } from "../src/assistant_bridge.ts";
-import { ChatError, chatSend, chatSessionCount, llmProbe, resetChatSessions, translateHeadlines } from "../src/chat.ts";
+import { ChatError, chatProgress, chatSend, chatSessionCount, llmProbe, resetChatSessions, translateHeadlines } from "../src/chat.ts";
 import { DirectTransportError, type ChatMessage, type ChatReply, type ChatRequest } from "../src/engines/direct_transport.ts";
 import { LocalAgentError, type LocalAgentId, type RunLocalAgentOptions } from "../src/local_agent_runtime.ts";
 import type { LlmOverride } from "../src/runtime_provider.ts";
@@ -880,4 +880,77 @@ test("🔴 模型输出被截断(finish_reason=length):这一轮报错,半截回
   const svc = fs.readFileSync(path.join(REPO, "orchestrator", "src", "service.ts"), "utf8");
   const at = svc.indexOf('if (raw.finishReason === "length") throw new ServiceError("reply_truncated", REPLY_TRUNCATED);');
   assert.ok(at > 0 && at < svc.indexOf("applyGate(String(raw.message.content", at), "截断检查在合规门之前");
+});
+
+test("chatProgress:进行中的轮次可查询(active/elapsed),结束或抛错后都清掉", async () => {
+  const root = tmp();
+  resetChatSessions();
+  try {
+    assert.equal(chatProgress("progress-a").active, false, "没有进行中的轮次时 active=false");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const run = chatSend(
+      { repoRoot: REPO, dataRoot: root, localAgentRunner: async () => { await gate; return "答案"; } },
+      { session: "progress-a", message: "慢问题", llm: CLAUDE },
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    const mid = chatProgress("progress-a");
+    assert.equal(mid.active, true);
+    assert.equal(mid.tool_calls, 0);
+    assert.equal(mid.running_tool, null);
+    assert.ok(mid.elapsed_ms >= 0);
+    release();
+    assert.equal((await run).reply, "答案");
+    assert.equal(chatProgress("progress-a").active, false, "轮次正常结束后要清掉,否则界面永远显示正在工作");
+
+    // 抛错的轮次也要清掉
+    await assert.rejects(chatSend(
+      { repoRoot: REPO, dataRoot: root, localAgentRunner: async () => { throw new LocalAgentError("agent_failed", "boom"); } },
+      { session: "progress-a", message: "x", llm: CLAUDE },
+    ));
+    assert.equal(chatProgress("progress-a").active, false);
+    // 非法 / 非字符串会话名不报错、按没有进行中的轮次处理
+    assert.equal(chatProgress("带 空格").active, false);
+    assert.equal(chatProgress(42).active, false);
+    assert.equal(chatProgress(undefined).active, false);
+  } finally { resetChatSessions(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("chatProgress:工具调用实时进入进度(桥执行器 → 会话进度表),完工后计数落在 last_tool", async () => {
+  const root = tmp();
+  resetChatSessions();
+  const tool: AssistantTool = {
+    name: "probe_tool", description: "测试工具", schema: z.object({ x: z.number() }),
+    async run() { await new Promise((r) => setTimeout(r, 120)); return { ok: true, x: 1 }; },
+  };
+  const seen: { during?: { running: string | null; calls: number }; after?: { running: string | null; calls: number; last: string | null } } = {};
+  try {
+    const result = await chatSend(
+      {
+        repoRoot: REPO, dataRoot: root, tools: [tool],
+        localAgentRunner: async (_agent, opts) => {
+          const mcp = opts.controlledMcp!;
+          const token = fs.readFileSync(mcp.env.VRA_ASSISTANT_TOKEN_FILE!, "utf8").trim();
+          const pending = fetch(mcp.env.VRA_ASSISTANT_URL + "/call", {
+            method: "POST",
+            headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+            body: JSON.stringify({ name: "probe_tool", arguments: { x: 1 } }),
+          });
+          await new Promise((r) => setTimeout(r, 40));   // 工具还在跑(120ms)
+          const during = chatProgress("progress-tools");
+          seen.during = { running: during.running_tool, calls: during.tool_calls };
+          const res = await pending;
+          const body = await res.json() as { content?: { text?: string }[] };
+          const after = chatProgress("progress-tools");
+          seen.after = { running: after.running_tool, calls: after.tool_calls, last: after.last_tool };
+          return "工具结果：" + (body.content?.[0]?.text ?? "");
+        },
+      },
+      { session: "progress-tools", message: "让我取个数", llm: CLAUDE },
+    );
+    assert.match(result.reply, /工具结果/);
+    assert.deepEqual(seen.during, { running: "probe_tool", calls: 0 }, "工具执行期间 running_tool 指向它");
+    assert.deepEqual(seen.after, { running: null, calls: 1, last: "probe_tool" }, "工具出结果后计数落在 last_tool");
+    assert.equal(result.tool_activity?.[0]?.name, "probe_tool", "既有工具回执不受影响");
+  } finally { resetChatSessions(); fs.rmSync(root, { recursive: true, force: true }); }
 });

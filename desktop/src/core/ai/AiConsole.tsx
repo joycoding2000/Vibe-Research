@@ -17,7 +17,7 @@ import { cn } from "../lib/cn";
 import { AiComposer, AiMessages } from "./AiMessages";
 import { useCurrentAiPage } from "./pageContext";
 import { type AiThread, directoryReadable, listThreads, newThreadId, removeThread, touchThread, whenLabel } from "./threads";
-import { type AiSend, useAiChat } from "./useAiChat";
+import { type AiProgressPoll, type AiSend, useAiChat } from "./useAiChat";
 
 const MIN_H = 220;
 const MAX_H_RATIO = 0.8;
@@ -46,6 +46,10 @@ export interface AiConsoleProps {
    * 发送、保存、复制用的都是原文。垂类给规则，Core 不认识里面的词。
    */
   displayText?: (text: string) => string;
+  /** 等待期间查询本轮进度（模型正在调哪个工具）。垂类注入后端查询；不给就只显示秒表。 */
+  pollProgress?: AiProgressPoll;
+  /** 工具名的展示文案（行业相关，垂类给）；不给就显示原始工具名。 */
+  toolLabel?: (name: string) => string;
 }
 
 const readH = (): number => {
@@ -57,7 +61,7 @@ const readH = (): number => {
   }
 };
 
-export function AiConsole({ open, onClose, send, configured, copy, renderReplyActions, renderReply, renderSetup, displayText }: AiConsoleProps) {
+export function AiConsole({ open, onClose, send, configured, copy, renderReplyActions, renderReply, renderSetup, displayText, pollProgress, toolLabel }: AiConsoleProps) {
   const page = useCurrentAiPage();
   /**
    * 聊天记录：左边一栏是**历次对话**，右边是当前这条。
@@ -66,7 +70,7 @@ export function AiConsole({ open, onClose, send, configured, copy, renderReplyAc
    */
   const [threads, setThreads] = useState<AiThread[]>(listThreads);
   const [threadId, setThreadId] = useState(() => listThreads()[0]?.id ?? newThreadId());
-  const chat = useAiChat(threadId, send);
+  const chat = useAiChat(threadId, send, pollProgress);
   const [height, setHeight] = useState(readH);
   const dragRef = useRef<{ y: number; h: number } | null>(null);
   // 🔴 落盘要用**最后一次算出来的**高度：`mouseup` 拿的是 effect 闭包里的 `height`，
@@ -248,6 +252,8 @@ export function AiConsole({ open, onClose, send, configured, copy, renderReplyAc
             <AiMessages
               msgs={inSync ? chat.msgs : []}
               loading={chat.loading || !inSync}
+              progress={inSync ? chat.progress : null}
+              toolLabel={toolLabel}
               err={chat.err}
               info={chat.info}
               renderReply={renderReply}

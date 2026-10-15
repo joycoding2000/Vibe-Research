@@ -205,7 +205,8 @@ test("首页 Agent 是可发送的真实对话区,不是装饰输入框", () => 
   );
   assert.match(homeAgent, /FinanceHomeAgent\(\)/);
   assert.match(homeAgent, /const configured = runtime\.status === "ok"/);
-  assert.match(homeAgent, /useAiChat\("home-agent",\s*sendTurn\)/);
+  assert.match(homeAgent, /useAiChat\("home-agent",\s*sendTurn,\s*backend\.chatProgress\)/,
+    "首页对话要接真实发起通道,并带上等待进度轮询");
   assert.match(homeAgent, /!configured[\s\S]*<AiMessages[\s\S]*<AiComposer/);
   assert.match(homeAgent, /onPick=\{\(text\) => \{ setDraft\(text\);/,
     "首页任务模板应先填入输入框，不能点击后立刻冒充已执行");

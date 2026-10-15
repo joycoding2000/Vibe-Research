@@ -16,7 +16,7 @@ import path from "node:path";
 
 import crypto from "node:crypto";
 
-import { IMPORT_MAX_TOTAL_BYTES, ServiceError, auditCheckHead, auditRegister, auditVerify, chatSend, compareRuns, llmProbe, translateHeadlines, evidenceAlerts, guidedToolTurn, listTools, runToolRequest, fetchEndpoint, ingestFiles, debateAdvance, debateStart, ledgerKinds, ledgerLabels, ledgerList, localAgents, productInfo, ledgerRemove, ledgerSnapshot, ledgerUpsert, pageQuery, getEvidence, credentialStatus, setCodeBuddyLocation, setCredential, getReport, knowledgeRecall, listEndpoints, listRuns, readRunFile, redact, reportDelete, reportDownload, reportPreview, reportUpload, reportsList, researchStatus, safePath, serviceContext, deleteRun, startResearch, thermoSeries, type ServiceContext } from "./service.ts";
+import { IMPORT_MAX_TOTAL_BYTES, ServiceError, auditCheckHead, auditRegister, auditVerify, chatProgress, chatSend, compareRuns, llmProbe, translateHeadlines, evidenceAlerts, guidedToolTurn, listTools, runToolRequest, fetchEndpoint, ingestFiles, debateAdvance, debateStart, ledgerKinds, ledgerLabels, ledgerList, localAgents, productInfo, ledgerRemove, ledgerSnapshot, ledgerUpsert, pageQuery, getEvidence, credentialStatus, setCodeBuddyLocation, setCredential, getReport, knowledgeRecall, listEndpoints, listRuns, readRunFile, redact, reportDelete, reportDownload, reportPreview, reportUpload, reportsList, researchStatus, safePath, serviceContext, deleteRun, startResearch, thermoSeries, type ServiceContext } from "./service.ts";
 import { REPORT_MAX_BYTES } from "./report_library.ts";
 import { savedCredential } from "./saved_credentials.ts";
 import { NOFOLLOW_FLAG, restrictPrivateFile } from "./fsutil.ts";
@@ -297,6 +297,11 @@ export function createApiServer(ctx: ServiceContext, opts: { token: string; cook
           const b = await readBody(req);
           return send(res, 200, await chatSend(ctx, b as never, signal));
         });
+      }
+      // 对话进行中的进度(前端轮询):只读计数与工具名,不含对话正文;没有进行中的轮次时 active=false。
+      // 页面据此显示「模型正在取数…」,用户不必靠猜来判断"在干活"还是"挂了"。
+      if (req.method === "GET" && url.pathname === "/chat/progress") {
+        return send(res, 200, chatProgress(url.searchParams.get("session")));
       }
       // 外部 RSS 标题翻译：与自由对话分开，后端固定 developer 指令、schema 与一次性线程。
       if (req.method === "POST" && url.pathname === "/translate-headlines") {

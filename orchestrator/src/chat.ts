@@ -18,7 +18,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 
-import { createToolExecutor, openAssistantBridge, MAX_TOOL_CALLS_PER_TURN, type AssistantTool, type ToolExecutor, type ToolReceipt } from "./assistant_bridge.ts";
+import { createToolExecutor, openAssistantBridge, MAX_TOOL_CALLS_PER_TURN, type AssistantTool, type ToolActivityEvent, type ToolExecutor, type ToolReceipt } from "./assistant_bridge.ts";
 import { gatePatterns } from "./config.ts";
 import { maskKnownSecret } from "./agent_runner.ts";
 import { DirectTransportError, chatCompletion, publicApiFailure, type ChatMessage, type ChatReply, type ChatRequest, type ChatToolCall } from "./engines/direct_transport.ts";
@@ -151,6 +151,29 @@ function recentTurns(s: Session): Session["turns"] {
 
 const sessions = new Map<string, Session>();
 
+/**
+ * 进行中的对话轮(按客户端会话名):给页面显示「模型正在干什么」,避免用户看不出"在干活"还是"真挂了"。
+ * 只存时间戳、工具调用计数与正在执行的工具名 —— **不含对话正文、工具参数与结果**。
+ */
+interface TurnProgress { startedAt: number; toolCalls: number; running: string | null; lastTool: string | null }
+const activeTurns = new Map<string, TurnProgress>();
+
+/** 某条对话线程此刻是否在回答、干到哪一步(前端轮询;没有进行中的轮次时 active=false)。 */
+export interface ChatTurnProgress {
+  active: boolean;
+  elapsed_ms: number;
+  tool_calls: number;
+  running_tool: string | null;
+  last_tool: string | null;
+}
+
+export function chatProgress(session: unknown): ChatTurnProgress {
+  const key = typeof session === "string" && SESSION_RE.test(session) ? session : "";
+  const p = key ? activeTurns.get(key) : undefined;
+  if (!p) return { active: false, elapsed_ms: 0, tool_calls: 0, running_tool: null, last_tool: null };
+  return { active: true, elapsed_ms: Date.now() - p.startedAt, tool_calls: p.toolCalls, running_tool: p.running, last_tool: p.lastTool };
+}
+
 function sweep(): void {
   const now = Date.now();
   for (const [k, s] of sessions) if (!s.busy && now - s.lastUsed > SESSION_IDLE_MS) sessions.delete(k);
@@ -246,6 +269,7 @@ function turnController(signal?: AbortSignal): { controller: AbortController; re
 async function localAgentTurn(
   opts: ChatSendOptions, agent: LocalAgentId, env: NodeJS.ProcessEnv,
   systemPrompt: string, userPrompt: string, timeoutMs: number,
+  onActivity?: (event: ToolActivityEvent) => void,
 ): Promise<TurnRaw> {
   const tools = opts.tools?.length ? opts.tools : undefined;
   const { controller, release } = turnController(opts.signal);
@@ -253,7 +277,7 @@ async function localAgentTurn(
   try {
     let controlledMcp: RunLocalAgentOptions["controlledMcp"];
     if (tools) {
-      bridge = await openAssistantBridge(tools, controller.signal);
+      bridge = await openAssistantBridge(tools, controller.signal, onActivity ? { onActivity } : {});
       const serverName = "vra_assistant";
       controlledMcp = {
         serverName, command: process.execPath,
@@ -310,13 +334,14 @@ async function apiToolResult(executor: ToolExecutor, call: ChatToolCall, budgetL
 async function apiTurn(
   opts: ChatSendOptions, api: ResolvedApiProvider,
   systemPrompt: string, history: Session["turns"], userContent: string, timeoutMs: number,
+  onActivity?: (event: ToolActivityEvent) => void,
 ): Promise<TurnRaw> {
   const complete = opts.apiComplete ?? chatCompletion;
   const deadline = Date.now() + timeoutMs;
   const { controller, release } = turnController(opts.signal);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const tools = opts.tools?.length ? opts.tools : undefined;
-  const executor = tools ? createToolExecutor(tools, controller.signal, { maxResultChars: API_TOOL_RESULT_CHARS }) : null;
+  const executor = tools ? createToolExecutor(tools, controller.signal, { maxResultChars: API_TOOL_RESULT_CHARS, ...(onActivity ? { onActivity } : {}) }) : null;
   const shaped = withOutputSchema(userContent, opts.outputSchema, api.structuredOutput);
   const responseFormat = shaped.outputSchema
     ? { type: "json_schema", json_schema: { name: "chat_output", strict: false, schema: shaped.outputSchema } }
@@ -451,16 +476,25 @@ export async function chatSend(
   const t0 = Date.now();
   let turn: TurnRaw;
   if (persistent) s.busy = true;
+  // 进度按客户端会话名登记(不含数据根 / 来源指纹 —— 页面轮询只知道会话名):同一时刻同名会话
+  // 只有一个在跑(persistent 有 busy 保护;探针类非持久轮次互不冲突,前端也不会查它们的进度)。
+  const progress: TurnProgress = { startedAt: Date.now(), toolCalls: 0, running: null, lastTool: null };
+  activeTurns.set(session, progress);
+  const noteActivity = (e: ToolActivityEvent) => {
+    if (e.phase === "start") progress.running = e.name;
+    else { progress.running = null; progress.lastTool = e.name; progress.toolCalls += 1; }
+  };
   try {
     if (rt.runtime === "local-agent") {
       // 本机 CLI 每轮是一次独立会话:历史由产品在进程内保管,拼进用户层
       const transcript = history.map((x) => `${x.role === "user" ? "用户" : "Agent"}：${x.text}`).join("\n\n");
       const userPrompt = transcript ? `【本会话此前内容】\n${transcript}\n\n【本轮】\n${turnBody}` : turnBody;
-      turn = await localAgentTurn(opts, rt.agent, rt.env, systemPrompt, userPrompt, timeoutMs);
+      turn = await localAgentTurn(opts, rt.agent, rt.env, systemPrompt, userPrompt, timeoutMs, noteActivity);
     } else {
-      turn = await apiTurn(opts, rt.api, systemPrompt, history, turnBody, timeoutMs);
+      turn = await apiTurn(opts, rt.api, systemPrompt, history, turnBody, timeoutMs, noteActivity);
     }
   } finally {
+    activeTurns.delete(session);
     if (persistent) s.busy = false;
     s.lastUsed = Date.now();
   }

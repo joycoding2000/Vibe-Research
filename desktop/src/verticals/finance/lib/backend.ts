@@ -440,6 +440,14 @@ export const backend = {
   }),
 
   /**
+   * 对话进行中的进度（等待气泡里显示「模型正在取数…」用）。
+   * 只读的后端计数：不含对话正文；失败/超时会由调用方静默降级成只有秒表。
+   */
+  chatProgress: (session: string, signal?: AbortSignal) =>
+    call<{ active: boolean; elapsed_ms: number; tool_calls: number; running_tool: string | null; last_tool: string | null }>(
+      `/chat/progress?session=${encodeURIComponent(session)}`, { signal }),
+
+  /**
    * 连接探针：后端固定一次性令牌，不召回资料库、不进聊天会话。设置页「测试并保存」专用。
    * 🔴 别再用 chat() 做连接检测 —— 那会把资料库片段发给正在测试的 provider（#40）。
    */

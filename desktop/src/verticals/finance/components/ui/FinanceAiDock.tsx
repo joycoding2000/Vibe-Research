@@ -23,6 +23,15 @@ import { sourcesMarkdown } from "@/lib/chatSources";
 
 const renderReply = (reply: string) => <ReportAnswer content={reply} />;
 
+/** 等待气泡里的工具名 → 用户看得懂的中文（行业词只留在垂类，Core 不认识它们）。 */
+const TOOL_LABELS: Record<string, string> = {
+  search_web: "联网搜索", read_web_page: "读取网页", list_endpoints: "查询数据目录", fetch_endpoint: "获取数据",
+  list_runs: "查询研究任务", research_status: "查询任务进度", get_report: "读取研究报告", get_evidence: "核对研究证据",
+  knowledge_recall: "读取知识档案", read_ledger: "读取台账", list_tools: "查询分析工具", run_tool: "运行分析工具",
+  start_research: "发起研究任务",
+};
+const toolLabel = (name: string): string => TOOL_LABELS[name] ?? name;
+
 /** 隐私模式开着时，对话里自己的金额和股数显示成 ••••（发给 AI 的仍是原文） */
 function usePrivateDisplay() {
   const { on } = usePrivacyMode();
@@ -81,7 +90,7 @@ const HOME_SUGGESTIONS = [
 export function FinanceHomeAgent() {
   const runtime = useAiRuntime();
   const configured = runtime.status === "ok";
-  const chat = useAiChat("home-agent", sendTurn);
+  const chat = useAiChat("home-agent", sendTurn, backend.chatProgress);
   const displayText = usePrivateDisplay();
   const [draft, setDraft] = useState("");
   const [setupOpen, setSetupOpen] = useState(!configured);
@@ -120,6 +129,8 @@ export function FinanceHomeAgent() {
       <AiMessages
         msgs={chat.msgs}
         loading={chat.loading}
+        progress={chat.progress}
+        toolLabel={toolLabel}
         err={chat.err}
         info={chat.info}
         renderReply={renderReply}
@@ -165,6 +176,8 @@ export function FinanceAiConsole({ open, onClose }: { open: boolean; onClose: ()
       renderReply={renderReply}
       renderSetup={setupLink}
       displayText={displayText}
+      pollProgress={backend.chatProgress}
+      toolLabel={toolLabel}
     />
   );
 }
@@ -187,6 +200,8 @@ export function FinanceAiDock() {
       renderReply={renderReply}
       renderSetup={setupLink}
       displayText={displayText}
+      pollProgress={backend.chatProgress}
+      toolLabel={toolLabel}
     />
   );
 }

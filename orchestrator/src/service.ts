@@ -43,6 +43,8 @@ import { runMetrics, type RunMetrics } from "./run_compare.ts";
 import { AuditError, appendAudit, checkHead, formatHead, ledgerSeal, registerAudit, verifyAudit, type AuditInput, type AuditReport, type AuditSnapshot, type HeadCheck } from "./audit_chain.ts";
 
 export { redact } from "./service_redact.ts";
+/** 对话进行中的进度(前端轮询):只读计数,不含对话正文;没有进行中的轮次时 active=false。 */
+export { chatProgress, type ChatTurnProgress } from "./chat.ts";
 
 
 export interface ServiceContext { repoRoot: string; dataRoot: string; python: string; node: string }

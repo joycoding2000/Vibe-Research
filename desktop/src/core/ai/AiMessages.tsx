@@ -13,11 +13,15 @@ import { noRemoteImages } from "./noRemoteImages";
 import { cleanAutoLinks } from "./cleanAutoLinks";
 
 import { cn } from "../lib/cn";
-import type { AiMsg } from "./useAiChat";
+import type { AiMsg, AiTurnProgress } from "./useAiChat";
 
 export interface AiMessagesProps {
   msgs: AiMsg[];
   loading: boolean;
+  /** 等待中这一轮的后端进度（模型在调哪个工具/调了几次）；没有通道或查不到时为 null */
+  progress?: AiTurnProgress | null;
+  /** 工具名的展示文案（行业相关，由垂类给）；不给就显示原始工具名 */
+  toolLabel?: (name: string) => string;
   err: string | null;
   info?: string | null;
   renderReply?: (reply: string) => ReactNode;
@@ -39,7 +43,7 @@ export interface AiMessagesProps {
 }
 
 export function AiMessages({
-  msgs, loading, err, info, renderReply, notice, suggestions = [], suggestionStyle = "pills", onPick, renderReplyActions, displayText, className,
+  msgs, loading, progress, toolLabel, err, info, renderReply, notice, suggestions = [], suggestionStyle = "pills", onPick, renderReplyActions, displayText, className,
 }: AiMessagesProps) {
   const show = displayText ?? ((t: string) => t);
   const ref = useRef<HTMLDivElement>(null);
@@ -72,7 +76,7 @@ export function AiMessages({
           </div>
         </div>
       ))}
-      {loading && <AiWaiting />}
+      {loading && <AiWaiting progress={progress} toolLabel={toolLabel} />}
       {info && <p role="status" className="rounded-lg border border-border bg-muted/20 p-2 text-xs text-muted-foreground">{info}</p>}
       {err && (
         <div role="alert" className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive">
@@ -101,17 +105,30 @@ export function AiMessages({
   );
 }
 
-/** Wall-clock waiting only: do not infer model activity or invent completion percentages. */
-export function AiWaiting() {
+/**
+ * 等待气泡：秒表 + 后端进度（模型正在调哪个工具/调了几次）。
+ * 秒表证明界面没死；进度让用户一眼分辨"在干活"还是"真挂了"，避免等不住关掉页面
+ * （关闭会中止本轮，且本轮不会被保存 —— 长提示里如实说明）。
+ * 进度查不到（老后端 / 查询失败）时降级为只有秒表，不编造状态。
+ */
+export function AiWaiting({ progress, toolLabel }: { progress?: AiTurnProgress | null; toolLabel?: (name: string) => string }) {
   const [seconds, setSeconds] = useState(0);
   useEffect(() => {
     const started = Date.now();
     const timer = window.setInterval(() => setSeconds(Math.floor((Date.now() - started) / 1000)), 1000);
     return () => window.clearInterval(timer);
   }, []);
+  const label = (name: string) => toolLabel?.(name) ?? name;
+  const activity = !progress ? null
+    : progress.running_tool
+      ? `正在${label(progress.running_tool)}（第 ${progress.tool_calls + 1} 次工具调用）…`
+      : progress.tool_calls > 0
+        ? `模型已调用工具 ${progress.tool_calls} 次${progress.last_tool ? `（最近：${label(progress.last_tool)}）` : ""}…`
+        : null;
   return <div className="text-xs text-muted-foreground">
     <p className="flex items-center gap-2"><Loader2 className="h-3.5 w-3.5 animate-spin" />等待回答<span aria-live="off"> · 已等待 {seconds} 秒</span></p>
-    {seconds >= 20 && <p role="status" className="mt-1">尚未收到回答。耗时取决于模型与工具调用，可停止等待后缩小问题范围。</p>}
+    {activity && <p role="status" className="mt-1" data-ai-activity>{activity}</p>}
+    {seconds >= 20 && <p role="status" className="mt-1">尚未收到回答。耗时取决于模型与工具调用；停止等待或关闭页面会取消本轮，不会在后台继续。</p>}
   </div>;
 }
 
